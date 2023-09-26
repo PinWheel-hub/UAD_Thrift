@@ -1,0 +1,9 @@
+{
+    "img_raw_num": 150,
+    "img_cut_num": 1000,
+    "padim_remain_rate": 0.8,
+    "image_spec_num": 20,
+    "model_spec_num": 20,
+    "model_disk_lifetime": 30,
+    "model_memoty_num": 10
+}

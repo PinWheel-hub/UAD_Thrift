@@ -1,2 +1,5 @@
-def TrainingProc(...):
+import os
+
+def TrainingProc(spec_name):
     pass
+    

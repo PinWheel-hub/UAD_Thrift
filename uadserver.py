@@ -23,6 +23,9 @@ from thrift.protocol import TBinaryProtocol
 from thrift.server import TServer
 from io import BytesIO
 
+from uadetect import init_uadetect_func, uadetect_func, init_uadetectSide_func, uadetectSide_func
+from uatraining import TrainingProc
+
 #规范使用logging utility
 class GlobLogger:
     def __init__(self):
@@ -109,9 +112,8 @@ class XrayDetectorHandler:
     #目前唯一的服务入口
     ###########################################
     def service_detector(self, img_data):
-        print(img_data)
-        global procFlag#, ......
-
+        global procFlag, pids
+        statuscode = 500
         try:
             result = []
             t0 = time.time()
@@ -134,27 +136,53 @@ class XrayDetectorHandler:
             ###也就是说会有可能两张不同规格图片同时运行
             with lockMain:
                 ###各总检查，模型是否存在
-                if not pids and xxxxx:
-                    spawnBackGroundWorker(spec,...)  ##此处一定需要线程锁！！
-                    raise Exception("No models.")
+                if os.path.exists(f'xuadetect/loadlist/{spec_name}'):
+                    statuscode = 250
+                    raise Exception("Models not loaded.")
+                if not os.path.exists(f'xuadetect/models/{spec_name}.pth'):
+                    if not os.path.exists(f'xuadetect/img_raw/{spec_name}'):
+                        os.makedirs(f'xuadetect/img_raw/{spec_name}')
+                    if os.path.exists(f'xuadetect/trainlist/{spec_name}'):
+                        statuscode = 200
+                        raise Exception("Model training.")
+                    cv2.imwrite(f'xuadetect/img_raw/{spec_name}/{img_name}.jpg', imgBig)
+                    img_num = len(os.listdir(f'xuadetect/img_raw/{spec_name}'))
+                    if img_num >= cfg['img_raw_num']:
+                        with open(f'xuadetect/trainlist/{spec_name}', "w") as f:
+                            pass
+                        if not procFlag:
+                            procFlag = True
+                            spawnBackGroundWorker(spec_name)  ##此处一定需要线程锁！！
+                        statuscode = 200
+                        raise Exception("Model training.")
+                    else:
+                        statuscode = img_num
+                        raise Exception("No models.")
 
                 ##缩小与裁切处理
+                ratioxy = 2
                 img = cv2.resize(imgBig, (int(r_w // ratioxy), int(r_h // ratioxy)), interpolation=cv2.INTER_CUBIC)
                 image_h, image_w, _ = img.shape
                 # 。。。。。。。
-
+                col_num = 3
+                ww = image_w // col_num
+                hh = ww
+                dh = int(0 * image_h)
                 part_images = []
+                part_images_side = []
                 part_locations = []
                 num = int(math.ceil(1.0 * (image_h - dh) / (hh - dh)))
                 for l in range(num):
-                    x1 = 0
-                    y1 = min(l * (hh - dh), image_h - hh)
-                    part_locations.append((x1, y1))
-                    part_images.append(img[y1:y1 + hh, x1:x1 + ww, :])
-
-                    x1 = image_w - ww
-                    part_locations.append((x1, y1))
-                    part_images.append(img[y1:y1 + hh, x1:x1 + ww, :])
+                    for c in range(col_num):
+                        x1 = ww * c
+                        y1 = min(l * (hh - dh), image_h - hh)
+                        part_locations.append((x1, y1))
+                        if c == 0:
+                            part_images_side.append(img[y1:y1 + hh, x1:x1 + ww, :])
+                        elif c == col_num - 1:
+                            part_images_side.append(cv2.flip(img[y1:y1 + hh, x1:x1 + ww, :], 1))
+                        else:
+                            part_images.append(img[y1:y1 + hh, x1:x1 + ww, :])
 
             ###本服务会发生多线程重入，如果线程之间需要排队处理，请加锁
             ###也就是说会有可能两张不同规格图片同时运行
@@ -163,11 +191,12 @@ class XrayDetectorHandler:
                 retlist=[]
                 retlistSide=[]
                 for part in part_images:
-                    retlist.append(pool.map_async(uadetect_func, (part,...))
-                    retlistSide.append(pool.map_async(uadetectSide_func, (part,...))
+                    retlist.append(pool.map_async(uadetect_func(part)))
+                for part in part_images_side:
+                    retlistSide.append(pool.map_async(uadetectSide_func(part)))
 
             ##等待识别阶段，务必先解锁
-            time.sleep(1.2)
+            time.sleep(1)
 
             for ritem in retlist:
                 waitresult = ritem.get(timeout=3)
@@ -204,12 +233,12 @@ class XrayDetectorHandler:
 
         except Exception as e:
             # print 'error at time: ', time.ctime()
-            printlog("service_detector error in processing: %s Err: %s" % (img_name, str(e)))
+            print("service_detector error in processing: %s Err: %s" % (img_name, str(e)))
             traceback.print_exc()
             # time.sleep(3)
             img_data = {}
             img_data["ID"] = img_name
-            img_data['StatusCode'] = 100
+            img_data['StatusCode'] = statuscode
             img_data["Result"] = result
             img_data["Note"] = 'Error: ' + str(e)
 
@@ -217,7 +246,7 @@ class XrayDetectorHandler:
             gLogger.logE(img_data)
 
         finally:
-            if debugMode: printlog('%s Total time for : %.2f' % (img_name, time.time() - t0))
+            if debugMode: print('%s Total time for : %.2f' % (img_name, time.time() - t0))
             for p in pids:
                 if not p.is_alive():
                     p.join(1)
@@ -227,10 +256,10 @@ class XrayDetectorHandler:
 
 
 ####异步进程，训练模型
-def spawnBackGroundWorker(spec):
+def spawnBackGroundWorker(spec_name):
     global pids
     ctx = multiprocessing.get_context('spawn')
-    p = ctx.Process(target=TrainingProc, args=(cudaList[i], i))
+    p = ctx.Process(target=TrainingProc, args=(spec_name))
     p.start()
     pids.append(p)
     return pids
@@ -273,6 +302,7 @@ def ParseCfg():
                 #.......
                 #.......
                 #.......
+                return jsconfig
             except:
                 return None
     else:
@@ -284,7 +314,11 @@ if __name__ == '__main__':
     cfgfile = 'config.json'
     if len(sys.argv) > 1:
         cfgfile = sys.argv[1]
-    ParseCfg()
+    cfg = ParseCfg()
+    print(cfg)
+
+    gLogger = GlobLogger()
+    debugMode = True
 
     ##多线程锁
     lockMain = threading.Lock()
