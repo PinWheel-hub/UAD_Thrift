@@ -30,10 +30,10 @@ objects = [
 ]
 CLASS_NAMES = textures + objects
 
-class MVTecDataset_torch(Dataset):
+class MVTecDataset(Dataset):
     def __init__(self,
                  dataset_root_path='/root/data/mvtec',
-                 class_name='bottle',
+                 class_name='tyre',
                  is_train=True,
                  resize=[256, 256],
                  cropsize=[224, 224],

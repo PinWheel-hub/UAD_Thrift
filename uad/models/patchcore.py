@@ -56,7 +56,7 @@ def get_projection(fin, fout, method='ortho'):
     return W
 
 
-class PaDiMPlus_torch(nn.Module):
+class PaDiMPlus(nn.Module):
     def __init__(self, arch='resnet18', pretrained=True, k=10, method='sample'):
         super().__init__()
         if isinstance(arch, type(None)) or isinstance(pretrained, type(None)):
@@ -285,7 +285,7 @@ class PaDiMPlus_torch(nn.Module):
         return score_map, img_score
 
 
-class PatchCore_torch(PaDiMPlus_torch):
+class PatchCore_torch(PaDiMPlus):
     def load(self, state):
         self.memory_bank = state['memory_bank'].cuda()
 
@@ -399,7 +399,7 @@ class PatchCore_torch(PaDiMPlus_torch):
         return score.item()
     
 
-class local_coreset(PaDiMPlus_torch):
+class local_coreset(PaDiMPlus):
     def __init__(self, arch='resnet18', pretrained=True, k=10, method='sample', blocks=[8, 8], feature_size=[32, 32]):
         super().__init__(arch=arch, pretrained=pretrained, k=k, method=method)
         self.blocks = blocks
@@ -588,9 +588,9 @@ def get_model(method):
         return PatchCore_torch
     elif 'local_coreset' == method:
         return local_coreset
-    return PaDiMPlus_torch
+    return PaDiMPlus
 
 
 if __name__ == '__main__':
-    model = PaDiMPlus_torch()
+    model = PaDiMPlus()
     print(model)

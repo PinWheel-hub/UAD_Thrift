@@ -135,6 +135,7 @@ class XrayDetectorHandler:
             ###本服务会发生多线程重入，如果线程之间需要排队处理，请加锁
             ###也就是说会有可能两张不同规格图片同时运行
             with lockMain:
+                procFlag = len(pids) > 0
                 ###各总检查，模型是否存在
                 if os.path.exists(f'xuadetect/loadlist/{spec_name}'):
                     statuscode = 250
@@ -143,6 +144,9 @@ class XrayDetectorHandler:
                     if not os.path.exists(f'xuadetect/img_raw/{spec_name}'):
                         os.makedirs(f'xuadetect/img_raw/{spec_name}')
                     if os.path.exists(f'xuadetect/trainlist/{spec_name}'):
+                        if not procFlag:
+                            procFlag = True
+                            spawnBackGroundWorker(spec_name)  ##此处一定需要线程锁！！
                         statuscode = 200
                         raise Exception("Model training.")
                     cv2.imwrite(f'xuadetect/img_raw/{spec_name}/{img_name}.jpg', imgBig)
@@ -233,7 +237,7 @@ class XrayDetectorHandler:
 
         except Exception as e:
             # print 'error at time: ', time.ctime()
-            print("service_detector error in processing: %s Err: %s" % (img_name, str(e)))
+            # print("service_detector error in processing: %s Err: %s" % (img_name, str(e)))
             traceback.print_exc()
             # time.sleep(3)
             img_data = {}
@@ -259,7 +263,7 @@ class XrayDetectorHandler:
 def spawnBackGroundWorker(spec_name):
     global pids
     ctx = multiprocessing.get_context('spawn')
-    p = ctx.Process(target=TrainingProc, args=(spec_name))
+    p = ctx.Process(target=TrainingProc, args=(spec_name,))
     p.start()
     pids.append(p)
     return pids
@@ -318,7 +322,7 @@ if __name__ == '__main__':
     print(cfg)
 
     gLogger = GlobLogger()
-    debugMode = True
+    debugMode = False
 
     ##多线程锁
     lockMain = threading.Lock()

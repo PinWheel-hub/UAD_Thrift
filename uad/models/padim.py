@@ -8,9 +8,9 @@ models = {
     "wide_resnet50_2": wide_resnet50_2
 }
 
-class ResNet_PaDiM_torch(nn.Module):
+class ResNet_PaDiM(nn.Module):
     def __init__(self, arch='resnet18', pretrained=True):
-        super(ResNet_PaDiM_torch, self).__init__()
+        super(ResNet_PaDiM, self).__init__()
         assert arch in models.keys(), 'arch {} not supported'.format(arch)
         self.model = models[arch](pretrained)
 

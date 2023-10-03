@@ -1,20 +1,21 @@
-class MyClass:
-    def __init__(self):
-        self.a = 0
-    def my_method(self):
-        self.a += 1
-        print("This is a method of MyClass", self.a)
+import multiprocessing
+from uatraining import TrainingProc
+import time
 
-def another_function():
-    c = a
-    print(c)
-    b = my_object
-    b.my_method()
+# 定义一个函数，将在进程中运行
+def my_function():
+    while True:
+        print("进程正在运行")
+        time.sleep(2)
 
-if __name__ == '__main__':
-    # 在主函数中创建一个对象
-    a = 10
-    my_object = MyClass()
+if __name__ == "__main__":
+    ctx = multiprocessing.get_context('spawn')
+    p = ctx.Process(target=TrainingProc, args=('1'))
+    # 启动进程
+    p.start()
 
-    # 调用其他函数，将对象作为参数传递
-    another_function()
+    while True:
+        print(p.is_alive())
+
+    # 等待进程完成（可选）
+    p.join()

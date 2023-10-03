@@ -12,4 +12,4 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from .mvtec_torch import MVTecDataset_torch
+from .mvtec import MVTecDataset
