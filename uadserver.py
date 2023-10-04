@@ -261,9 +261,9 @@ class XrayDetectorHandler:
 
 ####异步进程，训练模型
 def spawnBackGroundWorker(spec_name):
-    global pids
+    global pids, cfg
     ctx = multiprocessing.get_context('spawn')
-    p = ctx.Process(target=TrainingProc, args=(spec_name,))
+    p = ctx.Process(target=TrainingProc, args=(spec_name, cfg))
     p.start()
     pids.append(p)
     return pids

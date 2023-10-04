@@ -1,7 +1,7 @@
 # common arguments
 device: [cuda:0, cuda:1]
 seed: 3
-backbone: wide_resnet50_2  # Support resnet18, resnet50, wide_resnet50_2
+backbone: resnet18  # Support resnet18, resnet50, wide_resnet50_2
 
 batch_size: 1
 num_workers: 0
