@@ -7,7 +7,7 @@ import datetime
 from random import sample
 from collections import OrderedDict
 from tqdm import tqdm
-import threading
+import multiprocessing
 
 import numpy as np
 import pandas as pd
@@ -23,10 +23,35 @@ from uad.datasets import mvtec
 from uad.models.padim import ResNet_PaDiM
 from uad.utils.uad_configs import Dic2Obj
 
-def padim_train(args, model, train_dataloader, idx, save_name):
-    train_outputs = OrderedDict(
-        [('layer1', []), ('layer2', []), ('layer3', [])])
+def train(spec_name, position, cfg):
+    # padim初始化
+    with open('uad/padim.yml', 'r') as file:
+        padim_cfg = yaml.safe_load(file)
+    padim_cfg = Dic2Obj(padim_cfg)
+    random.seed(padim_cfg.seed)
+    np.random.seed(padim_cfg.seed)
+    torch.manual_seed(padim_cfg.seed)
+    torch.cuda.set_device(padim_cfg.device[0 if position == 'center' else 1])
 
+    model = ResNet_PaDiM(arch=padim_cfg.backbone, pretrained=False).cuda()
+    state = torch.load(f'xuadetect/models/{padim_cfg.backbone}.pth')
+    model.model.load_state_dict(state)
+
+    train_dataset = mvtec.MVTecDataset(
+        'xuadetect/img_cut/{}/del_padim'.format(spec_name if position == 'center' else f'{spec_name}_side'),
+        is_train=True,
+        resize=padim_cfg.resize,
+        cropsize=padim_cfg.crop_size)
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=padim_cfg.batch_size,
+        num_workers=padim_cfg.num_workers)
+    fins = {"resnet18": 448, "resnet50": 1792, "wide_resnet50_2": 1792}
+    t_d, d = fins[padim_cfg.backbone], 100  # "resnet18": {"orig_dims": 448, "reduced_dims": 100, "emb_scale": 4}
+    idx = torch.tensor(sample(range(0, t_d), d))
+
+    # padim训练
+    train_outputs = OrderedDict([('layer1', []), ('layer2', []), ('layer3', [])])
     # extract train set features
     epoch_begin = time.time()
     end_time = time.time()
@@ -54,8 +79,7 @@ def padim_train(args, model, train_dataloader, idx, save_name):
         layer_embedding = train_outputs[layer_name]
         layer_embedding = F.interpolate(
             layer_embedding, size=embedding_vectors.shape[-2:], mode="nearest")
-        embedding_vectors = torch.cat((embedding_vectors, layer_embedding),
-                                          1)
+        embedding_vectors = torch.cat((embedding_vectors, layer_embedding), 1)
 
     # randomly select d dimension
     embedding_vectors = torch.index_select(embedding_vectors, 1, idx)
@@ -66,58 +90,45 @@ def padim_train(args, model, train_dataloader, idx, save_name):
     cov = torch.zeros((C, C, H * W)).numpy()
     I = np.identity(C)
     for i in tqdm(range(H * W)):
-        cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(),
-                              rowvar=False) + 0.01 * I
+        cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
     # save learned distribution
     train_outputs = [torch.tensor(mean), torch.tensor(cov)]
     model.distribution = train_outputs
     t = time.time() - epoch_begin
     print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '\t' +
           "Train ends, total {:.2f}s".format(0, t))
-    dir_name = os.path.dirname(save_name)
-    if dir_name and not os.path.exists(dir_name):
-        os.makedirs(dir_name)
-    state_dict = {
-        "params": model.model.state_dict(),
-        "distribution": model.distribution,
-    }
-    torch.save(state_dict, save_name)
-    print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '\t' +
-            "Save model in {}".format(str(save_name)))
+    
+    # save_name = 'xuadetect/models/padim_{}.pth'.format(spec_name if position == 'center' else f'{spec_name}_side')
+    # dir_name = os.path.dirname(save_name)
+    # if dir_name and not os.path.exists(dir_name):
+    #     os.makedirs(dir_name)
+    # state_dict = {
+    #     "params": model.model.state_dict(),
+    #     "distribution": model.distribution,}
+    # torch.save(state_dict, save_name)
+    # print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '\t' + "Save model in {}".format(str(save_name)))
 
-def train(spec_name, position):
     # 用padim算法剔除一定比例的离群图片
-    with open('uad/padim.yml', 'r') as file:
-        padim_cfg = yaml.safe_load(file)
-    padim_cfg = Dic2Obj(padim_cfg)
-    random.seed(padim_cfg.seed)
-    np.random.seed(padim_cfg.seed)
-    torch.manual_seed(padim_cfg.seed)
-    torch.cuda.set_device(padim_cfg.device[0 if position == 'center' else 1])
+    model.eval()
+    def mahalanobis_pd(sample, mean, conv_inv):
+            return torch.sqrt(torch.matmul(torch.matmul((sample - mean).unsqueeze(1).T, conv_inv), (sample - mean)))[0]
 
-    model = ResNet_PaDiM(arch=padim_cfg.backbone, pretrained=False).cuda()
-    state = torch.load(f'xuadetect/model/{padim_cfg.backbone}')
-    model.model.load_state_dict(state)
-
-    train_dataset = mvtec.MVTecDataset_torch(
-        f'xuadetect/img_cut/{spec_name}/del_padim',
-        is_train=True,
-        resize=padim_cfg.resize,
-        cropsize=padim_cfg.crop_size)
-    train_dataloader = DataLoader(
-        train_dataset,
-        batch_size=padim_cfg.batch_size,
-        num_workers=padim_cfg.num_workers)
-    fins = {"resnet18": 448, "resnet50": 1792, "wide_resnet50_2": 1792}
-    t_d, d = fins[padim_cfg.backbone], 100  # "resnet18": {"orig_dims": 448, "reduced_dims": 100, "emb_scale": 4}
-    idx = torch.tensor(sample(range(0, t_d), d))
-    padim_train(padim_cfg, model, train_dataloader, idx, f'xuadetect/models/{spec_name}')
+    embedding_vectors = embedding_vectors.reshape((B, C, H * W)).cuda()
+    model.distribution[0] = model.distribution[0].cuda()
+    model.distribution[1] = model.distribution[1].cuda()
+    dist_list = []
+    for i in range(H * W):
+        mean = model.distribution[0][:, i]
+        conv_inv = torch.linalg.inv(model.distribution[1][:, :, i])
+        dist = [mahalanobis_pd(sample[:, i], mean, conv_inv).cpu().numpy()
+                for sample in embedding_vectors]
+        dist_list.append(dist)
 
 
     with open('uad/patchcore.yml', 'r') as file:
         patchcore_cfg = yaml.safe_load(file)
 
-def TrainingProc(spec_name):
+def TrainingProc(spec_name, cfg):
     # # 分割处理图片
     # img_dir = f'xuadetect/img_raw/{spec_name}'
     # img_files = [f for f in os.listdir(img_dir) if f.endswith('.jpg') or f.endswith('.png')]
@@ -143,13 +154,12 @@ def TrainingProc(spec_name):
     #                 break
     #             cv2.imwrite(os.path.join(save_dir if j == 1 else save_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
 
-    t = threading.Thread(target=train, args=(spec_name, 'center'))
-    t_side = threading.Thread(target=train, args=(spec_name, 'side'))
-    t.start()
-    t_side.start()
-    t.join()
-    t_side.join()
-
+    process = multiprocessing.Process(target=train, args=(spec_name, 'center', cfg))
+    process_side = multiprocessing.Process(target=train, args=(spec_name, 'side', cfg))
+    process.start()
+    process_side.start()
+    process.join()
+    process_side.join()
 
     # if os.path.exists(f'xuadetect/trainlist/{spec_name}'):
     #     os.remove(f'xuadetect/trainlist/{spec_name}')
