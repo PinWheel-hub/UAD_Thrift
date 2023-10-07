@@ -47,6 +47,8 @@ class MVTecDataset(Dataset):
         self.resize = resize
         self.cropsize = cropsize
         self.max_size = max_size
+        self.img_list = sorted([f for f in os.listdir(self.dataset_root_path)
+            if f.endswith('.jpg') or f.endswith('.png')])
 
         # load dataset
         if not is_predict and is_train:
@@ -86,8 +88,7 @@ class MVTecDataset(Dataset):
         x, y, mask = [], [], []
 
         img_dir = os.path.join(self.dataset_root_path, self.class_name, phase)
-        gt_dir = os.path.join(self.dataset_root_path, self.class_name,
-                              'ground_truth')
+        gt_dir = os.path.join(self.dataset_root_path, self.class_name, 'ground_truth')
         img_dir = self.dataset_root_path
 
         img_type_dir = img_dir

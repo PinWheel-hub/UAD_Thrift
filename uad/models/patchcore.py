@@ -57,7 +57,7 @@ def get_projection(fin, fout, method='ortho'):
 
 
 class PaDiMPlus(nn.Module):
-    def __init__(self, arch='resnet18', pretrained=True, k=10, method='sample'):
+    def __init__(self, arch='resnet18', pretrained=True, k=0.1, method='sample'):
         super().__init__()
         if isinstance(arch, type(None)) or isinstance(pretrained, type(None)):
             self.model = None
@@ -335,10 +335,10 @@ class PatchCore_torch(PaDiMPlus):
 
     @torch.no_grad()
     def compute_stats(self, embedding):
-        C = embedding.shape[1]
-        embedding = embedding.permute((0, 2, 3, 1)).reshape((-1, C))
         print("Creating CoreSet Sampler via k-Center Greedy")
-        sampler = KCenterGreedy(embedding, sampling_ratio=self.k / 100)
+        sampler = KCenterGreedy(embedding, sampling_ratio=self.k)
+        del embedding
+        torch.cuda.empty_cache()
         print("Getting the coreset from the main embedding.")
         coreset = sampler.sample_coreset()
         print(
@@ -400,7 +400,7 @@ class PatchCore_torch(PaDiMPlus):
     
 
 class local_coreset(PaDiMPlus):
-    def __init__(self, arch='resnet18', pretrained=True, k=10, method='sample', blocks=[8, 8], feature_size=[32, 32]):
+    def __init__(self, arch='resnet18', pretrained=True, k=0.1, method='sample', blocks=[8, 8], feature_size=[32, 32]):
         super().__init__(arch=arch, pretrained=pretrained, k=k, method=method)
         self.blocks = blocks
         self.feature_size = feature_size
@@ -499,7 +499,7 @@ class local_coreset(PaDiMPlus):
                                                                          -1, C))
         # embedding = embedding.permute((0, 2, 3, 1)).reshape((-1, C))
         print("Creating CoreSet Sampler via k-Center Greedy")
-        sampler = my_KCenterGreedy(my_embedding, sampling_ratio=self.k / 100)
+        sampler = my_KCenterGreedy(my_embedding, sampling_ratio=self.k)
         print("Getting the coreset from the main embedding.")
         coreset = sampler.sample_coreset()
         print(

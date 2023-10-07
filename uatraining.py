@@ -8,6 +8,9 @@ from random import sample
 from collections import OrderedDict
 from tqdm import tqdm
 import multiprocessing
+import shutil
+import random
+import collections
 
 import numpy as np
 import pandas as pd
@@ -22,8 +25,10 @@ import yaml
 from uad.datasets import mvtec
 from uad.models.padim import ResNet_PaDiM
 from uad.utils.uad_configs import Dic2Obj
+from uad.models.patchcore import get_model
 
-def train(spec_name, position, cfg):
+# 用padim算法剔除一定比例的离群图片
+def padim_del(spec_name, position, cfg):
     # padim初始化
     with open('uad/padim.yml', 'r') as file:
         padim_cfg = yaml.safe_load(file)
@@ -36,9 +41,9 @@ def train(spec_name, position, cfg):
     model = ResNet_PaDiM(arch=padim_cfg.backbone, pretrained=False).cuda()
     state = torch.load(f'xuadetect/models/{padim_cfg.backbone}.pth')
     model.model.load_state_dict(state)
-
+    model.eval()
     train_dataset = mvtec.MVTecDataset(
-        'xuadetect/img_cut/{}/del_padim'.format(spec_name if position == 'center' else f'{spec_name}_side'),
+        'xuadetect/img_cut/{}/patchcore'.format(spec_name if position == 'center' else f'{spec_name}_side'),
         is_train=True,
         resize=padim_cfg.resize,
         cropsize=padim_cfg.crop_size)
@@ -56,7 +61,7 @@ def train(spec_name, position, cfg):
     epoch_begin = time.time()
     end_time = time.time()
 
-    for index, x in tqdm(enumerate(train_dataloader), total=len(train_dataloader)):
+    for index, x in tqdm(enumerate(train_dataloader), total=len(train_dataloader), desc="Extracting features"):
         start_time = time.time()
         data_time = start_time - end_time
 
@@ -71,6 +76,9 @@ def train(spec_name, position, cfg):
         end_time = time.time()
         batch_time = end_time - start_time
 
+    del model, outputs
+    torch.cuda.empty_cache()
+    
     for k, v in train_outputs.items():
         train_outputs[k] = torch.cat(v, 0)
     # Embedding concat
@@ -82,58 +90,142 @@ def train(spec_name, position, cfg):
         embedding_vectors = torch.cat((embedding_vectors, layer_embedding), 1)
 
     # randomly select d dimension
-    embedding_vectors = torch.index_select(embedding_vectors, 1, idx)
+    embedding_vectors = torch.index_select(embedding_vectors, 1, idx).cuda()
     # calculate multivariate Gaussian distribution
     B, C, H, W = embedding_vectors.shape
     embedding_vectors = embedding_vectors.reshape((B, C, H * W))
-    mean = torch.mean(embedding_vectors, axis=0).numpy()
-    cov = torch.zeros((C, C, H * W)).numpy()
-    I = np.identity(C)
-    for i in tqdm(range(H * W)):
-        cov[:, :, i] = np.cov(embedding_vectors[:, :, i].numpy(), rowvar=False) + 0.01 * I
+    mean = torch.mean(embedding_vectors, axis=0)
+    cov = torch.zeros((C, C, H * W)).cuda()
+    I = torch.eye(C).cuda()
+    for i in tqdm(range(H * W), desc="Calculating covariance"):
+        cov[:, :, i] = torch.cov(embedding_vectors[:, :, i].T) + 0.01 * I
     # save learned distribution
-    train_outputs = [torch.tensor(mean), torch.tensor(cov)]
-    model.distribution = train_outputs
     t = time.time() - epoch_begin
     print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '\t' +
           "Train ends, total {:.2f}s".format(0, t))
-    
-    # save_name = 'xuadetect/models/padim_{}.pth'.format(spec_name if position == 'center' else f'{spec_name}_side')
-    # dir_name = os.path.dirname(save_name)
-    # if dir_name and not os.path.exists(dir_name):
-    #     os.makedirs(dir_name)
-    # state_dict = {
-    #     "params": model.model.state_dict(),
-    #     "distribution": model.distribution,}
-    # torch.save(state_dict, save_name)
-    # print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '\t' + "Save model in {}".format(str(save_name)))
 
-    # 用padim算法剔除一定比例的离群图片
-    model.eval()
+    # padim计算距离
     def mahalanobis_pd(sample, mean, conv_inv):
-            return torch.sqrt(torch.matmul(torch.matmul((sample - mean).unsqueeze(1).T, conv_inv), (sample - mean)))[0]
-
-    embedding_vectors = embedding_vectors.reshape((B, C, H * W)).cuda()
-    model.distribution[0] = model.distribution[0].cuda()
-    model.distribution[1] = model.distribution[1].cuda()
+            return torch.sqrt(
+                torch.matmul(
+                    torch.matmul((sample - mean.unsqueeze(0).expand_as(sample)), conv_inv), (sample - mean.unsqueeze(0).expand_as(sample)).T)).diag()
     dist_list = []
-    for i in range(H * W):
-        mean = model.distribution[0][:, i]
-        conv_inv = torch.linalg.inv(model.distribution[1][:, :, i])
-        dist = [mahalanobis_pd(sample[:, i], mean, conv_inv).cpu().numpy()
-                for sample in embedding_vectors]
+    for i in tqdm(range(H * W), desc="Calculating dsitance"):
+        conv_inv = torch.linalg.inv(cov[:, :, i])
+        dist = mahalanobis_pd(embedding_vectors[:, :, i], mean[:, i], conv_inv).cpu().numpy()
         dist_list.append(dist)
+    
+    del mean, cov, embedding_vectors
+    torch.cuda.empty_cache()
+
+    dist_list = np.array(dist_list).transpose(1, 0).reshape(B, H, W)
+
+    # upsample
+    dist_list = torch.tensor(dist_list)
+    score_map = F.interpolate(
+        dist_list.unsqueeze(1),
+        size=x.shape[2:],
+        mode='bilinear',
+        align_corners=False).squeeze().numpy()
+    
+    image_score = score_map.reshape(score_map.shape[0], -1).max(axis=1)
+    sorted_index = np.argsort(image_score)[::-1]
+
+    del_padim = 'xuadetect/img_cut/{}/del_padim'.format(spec_name if position == 'center' else f'{spec_name}_side')
+    if not os.path.exists(del_padim):
+        os.makedirs(del_padim)
+    del_random = 'xuadetect/img_cut/{}/del_random'.format(spec_name if position == 'center' else f'{spec_name}_side')
+    if not os.path.exists(del_random):
+        os.makedirs(del_random)
+
+    random_list = list(range(int((1 - cfg["padim_del_rate"]) * len(sorted_index))))
+    # 随机打乱下标
+    random.shuffle(random_list)
+    
+    for i, index in enumerate(sorted_index):
+        source_path = os.path.join('xuadetect/img_cut/{}/patchcore'.format(spec_name if position == 'center' else f'{spec_name}_side'), train_dataset.img_list[index])
+        # print(i - int(cfg["padim_del_rate"] * len(sorted_index)))
+        if i < cfg["padim_del_rate"] * len(sorted_index):
+            target_path = os.path.join(del_padim, train_dataset.img_list[index])
+            shutil.move(source_path, target_path)
+        elif random_list[i - int(cfg["padim_del_rate"] * len(sorted_index))] >= cfg["patchcore_train_num"]:
+            target_path = os.path.join(del_random, train_dataset.img_list[index])
+            shutil.move(source_path, target_path)
 
 
+    
+
+def train(spec_name, position, cfg):
+    # 用padim算法剔除一定比例的离群图片,然后随机保留定量图片
+    # padim_del(spec_name, position, cfg)
+    print("padim end", torch.cuda.memory_allocated())
+    
     with open('uad/patchcore.yml', 'r') as file:
         patchcore_cfg = yaml.safe_load(file)
+    
+    patchcore_cfg = Dic2Obj(patchcore_cfg)
+    random.seed(patchcore_cfg.seed)
+    np.random.seed(patchcore_cfg.seed)
+    torch.manual_seed(patchcore_cfg.seed)
+    torch.cuda.set_device(patchcore_cfg.device[0 if position == 'center' else 1])
+
+    model = get_model(patchcore_cfg.method)(arch=patchcore_cfg.backbone,
+                                    pretrained=False,
+                                    k=patchcore_cfg.k,
+                                    method=patchcore_cfg.method).cuda()
+    state = torch.load(f'xuadetect/models/{patchcore_cfg.backbone}.pth')
+    model.model.load_state_dict(state, strict=False)
+    model.init_projection()
+    model.eval()
+
+    # build datasets
+    train_dataset = mvtec.MVTecDataset(
+        'xuadetect/img_cut/{}/patchcore'.format(spec_name if position == 'center' else f'{spec_name}_side'),
+        is_train=True,
+        resize=patchcore_cfg.resize,
+        cropsize=patchcore_cfg.crop_size,
+        max_size=patchcore_cfg.max_size if hasattr(patchcore_cfg, 'max_size') else None)
+    train_dataloader = DataLoader(
+        train_dataset,
+        batch_size=patchcore_cfg.batch_size,
+        num_workers=patchcore_cfg.num_workers)
+
+    epoch_begin = time.time()
+    # extract train set features
+    outs = []
+    for x in tqdm(train_dataloader, '| feature extraction | train |'):
+        # model prediction
+        out = model(x.cuda())
+        out = model.project(out)
+        outs.append(out)
+    del out, x
+    torch.cuda.empty_cache()
+    outs = torch.concat(outs, 0)
+    C = outs.shape[1]
+    outs = outs.permute((0, 2, 3, 1)).reshape((-1, C))
+    model.compute_stats(outs)
+    del outs
+    torch.cuda.empty_cache()
+
+    t = time.time() - epoch_begin
+    print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '\t' +
+          "Train ends, total {:.2f}s".format(t))
+    print("Saving model...")
+    save_name = 'xuadetect/models/{}.pth'.format(spec_name if position == 'center' else f'{spec_name}_side')
+    dir_name = os.path.dirname(save_name)
+    os.makedirs(dir_name, exist_ok=True)
+    memory_bank = collections.OrderedDict()
+    memory_bank['memory_bank'] =  model.memory_bank
+    state_dict = {"stats": memory_bank,}
+    torch.save(state_dict, save_name)
+    print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '\t' + "Save model in {}".format(str(save_name)))
 
 def TrainingProc(spec_name, cfg):
-    # # 分割处理图片
+    # 分割处理图片
     # img_dir = f'xuadetect/img_raw/{spec_name}'
     # img_files = [f for f in os.listdir(img_dir) if f.endswith('.jpg') or f.endswith('.png')]
-    # save_dir = f'xuadetect/img_cut/{spec_name}/del_padim'
-    # save_side_dir = f'xuadetect/img_cut/{spec_name}_side/del_padim'
+    # save_dir = f'xuadetect/img_cut/{spec_name}/patchcore'
+    # save_side_dir = f'xuadetect/img_cut/{spec_name}_side/patchcore'
     # if not os.path.exists(save_dir):
     #     os.makedirs(save_dir)
     # if not os.path.exists(save_side_dir):
@@ -161,7 +253,12 @@ def TrainingProc(spec_name, cfg):
     process.join()
     process_side.join()
 
-    # if os.path.exists(f'xuadetect/trainlist/{spec_name}'):
-    #     os.remove(f'xuadetect/trainlist/{spec_name}')
+    if not os.path.exists('xuadetect/loadlist') and os.path.exists(f'xuadetect/models/{spec_name}.pth') and os.path.exists(f'xuadetect/models/{spec_name}_side.pth'):
+        os.makedirs('xuadetect/loadlist/')
+    with open(f'xuadetect/loadlist/{spec_name}', "w") as f:
+        pass
+
+    if os.path.exists(f'xuadetect/trainlist/{spec_name}'):
+        os.remove(f'xuadetect/trainlist/{spec_name}')
 
     
