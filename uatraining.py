@@ -1,8 +1,6 @@
 import os
-import sys
 import time
 import random
-import argparse
 import datetime
 from random import sample
 from collections import OrderedDict
@@ -13,13 +11,12 @@ import random
 import collections
 
 import numpy as np
-import pandas as pd
+import cv2
 
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
-import cv2
 import yaml
 
 from uad.datasets import mvtec
@@ -28,7 +25,7 @@ from uad.utils.uad_configs import Dic2Obj
 from uad.models.patchcore import get_model
 
 # 用padim算法剔除一定比例的离群图片
-def padim_del(spec_name, position, cfg):
+def padim_del(spec_name, if_side, cfg):
     # padim初始化
     with open('uad/padim.yml', 'r') as file:
         padim_cfg = yaml.safe_load(file)
@@ -36,14 +33,14 @@ def padim_del(spec_name, position, cfg):
     random.seed(padim_cfg.seed)
     np.random.seed(padim_cfg.seed)
     torch.manual_seed(padim_cfg.seed)
-    torch.cuda.set_device(padim_cfg.device[0 if position == 'center' else 1])
+    torch.cuda.set_device(padim_cfg.device[0 if not if_side else 1])
 
     model = ResNet_PaDiM(arch=padim_cfg.backbone, pretrained=False).cuda()
     state = torch.load(f'xuadetect/models/{padim_cfg.backbone}.pth')
     model.model.load_state_dict(state)
     model.eval()
     train_dataset = mvtec.MVTecDataset(
-        'xuadetect/img_cut/{}/patchcore'.format(spec_name if position == 'center' else f'{spec_name}_side'),
+        'xuadetect/img_cut/{}/patchcore'.format(spec_name if not if_side else f'{spec_name}_side'),
         is_train=True,
         resize=padim_cfg.resize,
         cropsize=padim_cfg.crop_size)
@@ -131,10 +128,10 @@ def padim_del(spec_name, position, cfg):
     image_score = score_map.reshape(score_map.shape[0], -1).max(axis=1)
     sorted_index = np.argsort(image_score)[::-1]
 
-    del_padim = 'xuadetect/img_cut/{}/del_padim'.format(spec_name if position == 'center' else f'{spec_name}_side')
+    del_padim = 'xuadetect/img_cut/{}/del_padim'.format(spec_name if not if_side else f'{spec_name}_side')
     if not os.path.exists(del_padim):
         os.makedirs(del_padim)
-    del_random = 'xuadetect/img_cut/{}/del_random'.format(spec_name if position == 'center' else f'{spec_name}_side')
+    del_random = 'xuadetect/img_cut/{}/del_random'.format(spec_name if not if_side else f'{spec_name}_side')
     if not os.path.exists(del_random):
         os.makedirs(del_random)
 
@@ -143,7 +140,7 @@ def padim_del(spec_name, position, cfg):
     random.shuffle(random_list)
     
     for i, index in enumerate(sorted_index):
-        source_path = os.path.join('xuadetect/img_cut/{}/patchcore'.format(spec_name if position == 'center' else f'{spec_name}_side'), train_dataset.img_list[index])
+        source_path = os.path.join('xuadetect/img_cut/{}/patchcore'.format(spec_name if not if_side else f'{spec_name}_side'), train_dataset.img_list[index])
         # print(i - int(cfg["padim_del_rate"] * len(sorted_index)))
         if i < cfg["padim_del_rate"] * len(sorted_index):
             target_path = os.path.join(del_padim, train_dataset.img_list[index])
@@ -155,10 +152,10 @@ def padim_del(spec_name, position, cfg):
 
     
 
-def train(spec_name, position, cfg):
+def train(spec_name, if_side, cfg):
     # 用padim算法剔除一定比例的离群图片,然后随机保留定量图片
-    # padim_del(spec_name, position, cfg)
-    print("padim end", torch.cuda.memory_allocated())
+    padim_del(spec_name, if_side, cfg)
+    print("padim del end", torch.cuda.memory_allocated())
     
     with open('uad/patchcore.yml', 'r') as file:
         patchcore_cfg = yaml.safe_load(file)
@@ -167,7 +164,7 @@ def train(spec_name, position, cfg):
     random.seed(patchcore_cfg.seed)
     np.random.seed(patchcore_cfg.seed)
     torch.manual_seed(patchcore_cfg.seed)
-    torch.cuda.set_device(patchcore_cfg.device[0 if position == 'center' else 1])
+    torch.cuda.set_device(patchcore_cfg.device[0 if not if_side else 1])
 
     model = get_model(patchcore_cfg.method)(arch=patchcore_cfg.backbone,
                                     pretrained=False,
@@ -180,7 +177,7 @@ def train(spec_name, position, cfg):
 
     # build datasets
     train_dataset = mvtec.MVTecDataset(
-        'xuadetect/img_cut/{}/patchcore'.format(spec_name if position == 'center' else f'{spec_name}_side'),
+        'xuadetect/img_cut/{}/patchcore'.format(spec_name if not if_side else f'{spec_name}_side'),
         is_train=True,
         resize=patchcore_cfg.resize,
         cropsize=patchcore_cfg.crop_size,
@@ -211,43 +208,43 @@ def train(spec_name, position, cfg):
     print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '\t' +
           "Train ends, total {:.2f}s".format(t))
     print("Saving model...")
-    save_name = 'xuadetect/models/{}.pth'.format(spec_name if position == 'center' else f'{spec_name}_side')
+    save_name = 'xuadetect/models/{}.pth'.format(spec_name if not if_side else f'{spec_name}_side')
     dir_name = os.path.dirname(save_name)
     os.makedirs(dir_name, exist_ok=True)
     memory_bank = collections.OrderedDict()
     memory_bank['memory_bank'] =  model.memory_bank
-    state_dict = {"stats": memory_bank,}
+    state_dict = {"stats": memory_bank}
     torch.save(state_dict, save_name)
     print(datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + '\t' + "Save model in {}".format(str(save_name)))
 
 def TrainingProc(spec_name, cfg):
     # 分割处理图片
-    # img_dir = f'xuadetect/img_raw/{spec_name}'
-    # img_files = [f for f in os.listdir(img_dir) if f.endswith('.jpg') or f.endswith('.png')]
-    # save_dir = f'xuadetect/img_cut/{spec_name}/patchcore'
-    # save_side_dir = f'xuadetect/img_cut/{spec_name}_side/patchcore'
-    # if not os.path.exists(save_dir):
-    #     os.makedirs(save_dir)
-    # if not os.path.exists(save_side_dir):
-    #     os.makedirs(save_side_dir)
-    # col_num = 3
-    # for img_num, img_file in enumerate(img_files):
-    #     img = cv2.imread(os.path.join(img_dir, img_file))
-    #     i = 0
-    #     patch_length = img.shape[1] // col_num
-    #     row_num = img.shape[0] // patch_length
-    #     for i in range(0, row_num + 1):
-    #         for j in range(0, col_num):
-    #             if patch_length * (i + 1) < img.shape[0]:
-    #                 rg = img[patch_length * i: patch_length * (i + 1), patch_length * j: patch_length * (j + 1)]
-    #             elif img.shape[0] - patch_length * i > patch_length / 2:
-    #                 rg = img[img.shape[0] - patch_length: img.shape[0], patch_length * j: patch_length * (j + 1)]
-    #             else:
-    #                 break
-    #             cv2.imwrite(os.path.join(save_dir if j == 1 else save_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
+    img_dir = f'xuadetect/img_raw/{spec_name}'
+    img_files = [f for f in os.listdir(img_dir) if f.endswith('.jpg') or f.endswith('.png')]
+    save_dir = f'xuadetect/img_cut/{spec_name}/patchcore'
+    save_side_dir = f'xuadetect/img_cut/{spec_name}_side/patchcore'
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+    if not os.path.exists(save_side_dir):
+        os.makedirs(save_side_dir)
+    col_num = 3
+    for img_num, img_file in enumerate(img_files):
+        img = cv2.imread(os.path.join(img_dir, img_file))
+        i = 0
+        patch_length = img.shape[1] // col_num
+        row_num = img.shape[0] // patch_length
+        for i in range(0, row_num + 1):
+            for j in range(0, col_num):
+                if patch_length * (i + 1) < img.shape[0]:
+                    rg = img[patch_length * i: patch_length * (i + 1), patch_length * j: patch_length * (j + 1)]
+                elif img.shape[0] - patch_length * i > patch_length / 2:
+                    rg = img[img.shape[0] - patch_length: img.shape[0], patch_length * j: patch_length * (j + 1)]
+                else:
+                    break
+                cv2.imwrite(os.path.join(save_dir if j == 1 else save_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
 
-    process = multiprocessing.Process(target=train, args=(spec_name, 'center', cfg))
-    process_side = multiprocessing.Process(target=train, args=(spec_name, 'side', cfg))
+    process = multiprocessing.Process(target=train, args=(spec_name, False, cfg))
+    process_side = multiprocessing.Process(target=train, args=(spec_name, True, cfg))
     process.start()
     process_side.start()
     process.join()

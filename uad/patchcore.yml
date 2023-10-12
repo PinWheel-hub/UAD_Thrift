@@ -11,6 +11,6 @@ max_img: 1000
 resize: [256, 256]
 crop_size: [256, 256]
 
-threshold: 1.5
+threshold: 1.56
 
 

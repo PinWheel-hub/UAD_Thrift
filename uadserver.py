@@ -23,7 +23,7 @@ from thrift.protocol import TBinaryProtocol
 from thrift.server import TServer
 from io import BytesIO
 
-from uadetect import init_uadetect_func, uadetect_func, init_uadetectSide_func, uadetectSide_func
+from uadetect import init_uadetect_func, uadetect_func, load_func, del_func
 from uatraining import TrainingProc
 
 #规范使用logging utility
@@ -112,7 +112,7 @@ class XrayDetectorHandler:
     #目前唯一的服务入口
     ###########################################
     def service_detector(self, img_data):
-        global procFlag, pids
+        global procFlag, pids, model_num
         statuscode = 500
         try:
             result = []
@@ -138,9 +138,24 @@ class XrayDetectorHandler:
                 procFlag = len(pids) > 0
                 ###各总检查，模型是否存在
                 if os.path.exists(f'xuadetect/loadlist/{spec_name}'):
-                    statuscode = 250
-                    raise Exception("Models not loaded.")
-                if not os.path.exists(f'xuadetect/models/{spec_name}.pth'):
+                    if model_num >= cfg["model_memory_num"]:
+                        delete = pool.apply_async(del_func)
+                        deleteSide = poolSide.apply_async(del_func)
+                        del_spec = delete.get(timeout=2)
+                        deleteSide.wait(timeout=2)
+                        model_num -= 1
+                        print(del_spec)
+                        with open(f'xuadetect/loadlist/{del_spec}', "w") as f:
+                            pass
+                    load = pool.apply_async(load_func, (spec_name, False))
+                    loadSide = poolSide.apply_async(load_func, (spec_name, True))
+                    load.wait(timeout=2)
+                    loadSide.wait(timeout=2)
+                    model_num += 1
+                    
+                    if os.path.exists(f'xuadetect/loadlist/{spec_name}'):
+                        os.remove(f'xuadetect/loadlist/{spec_name}')
+                elif not os.path.exists(f'xuadetect/models/{spec_name}.pth'):
                     if not os.path.exists(f'xuadetect/img_raw/{spec_name}'):
                         os.makedirs(f'xuadetect/img_raw/{spec_name}')
                     if os.path.exists(f'xuadetect/trainlist/{spec_name}'):
@@ -175,18 +190,22 @@ class XrayDetectorHandler:
                 part_images = []
                 part_images_side = []
                 part_locations = []
+                part_locations_side = []
                 num = int(math.ceil(1.0 * (image_h - dh) / (hh - dh)))
                 for l in range(num):
                     for c in range(col_num):
                         x1 = ww * c
                         y1 = min(l * (hh - dh), image_h - hh)
-                        part_locations.append((x1, y1))
                         if c == 0:
                             part_images_side.append(img[y1:y1 + hh, x1:x1 + ww, :])
+                            part_locations_side.append((y1 * ratioxy, x1 * ratioxy))
                         elif c == col_num - 1:
                             part_images_side.append(cv2.flip(img[y1:y1 + hh, x1:x1 + ww, :], 1))
+                            part_locations_side.append((y1 * ratioxy, x1 * ratioxy))
                         else:
                             part_images.append(img[y1:y1 + hh, x1:x1 + ww, :])
+                            part_locations.append((y1 * ratioxy, x1 * ratioxy))
+                        
 
             ###本服务会发生多线程重入，如果线程之间需要排队处理，请加锁
             ###也就是说会有可能两张不同规格图片同时运行
@@ -194,31 +213,43 @@ class XrayDetectorHandler:
                 ####对裁切小片识别处理
                 retlist=[]
                 retlistSide=[]
-                for part in part_images:
-                    retlist.append(pool.map_async(uadetect_func(part)))
-                for part in part_images_side:
-                    retlistSide.append(pool.map_async(uadetectSide_func(part)))
+                for i, part in enumerate(part_images):
+                    retlist.append(pool.apply_async(uadetect_func, (part, spec_name, part_locations[i])))
+                for i, part in enumerate(part_images_side):
+                    retlistSide.append(poolSide.apply_async(uadetect_func, (part, spec_name, part_locations_side[i])))
 
             ##等待识别阶段，务必先解锁
-            time.sleep(1)
+            # time.sleep(1)
 
             for ritem in retlist:
                 waitresult = ritem.get(timeout=3)
-
                 ###返回结果处理，仅供参考
                 ###返回需要指示位置坐标
-                for fitem in waitresult:
-                    (img_name2, part_ret, _) = fitem
-                    partjs = json.loads(part_ret)
-                    part_result = partjs['Result']
-                    ###################################
-                    #每个flaw记录，需要FaultID，Rate概率，左上坐标(x,y),右下坐标(x,y)
-                    #flaw['FaultID'] = 'XX'
-                    #flaw['Rate'] = '60'
-                    #flaw['PointS'] = [str(200), str(200)]
-                    #flaw['PointE'] = [str(r_w - 200), str(600)]
-                    for flaw in part_result:
-                        result.append(flaw)
+                (score, location, fault_flag) = waitresult
+                ###################################
+                # 每个flaw记录，需要FaultID，Rate概率，左上坐标(x,y),右下坐标(x,y)
+                if fault_flag:
+                    flaw = {}
+                    flaw['FaultID'] = '85'
+                    flaw['Rate'] = score
+                    flaw['PointS'] = location
+                    flaw['PointE'] = (location[0] + ww, location[1] + ww)
+                    result.append(flaw)
+
+            for ritem in retlistSide:
+                waitresult = ritem.get(timeout=3)
+                ###返回结果处理，仅供参考
+                ###返回需要指示位置坐标
+                (score, location, fault_flag) = waitresult
+                ###################################
+                # 每个flaw记录，需要FaultID，Rate概率，左上坐标(x,y),右下坐标(x,y)
+                if fault_flag:
+                    flaw = {}
+                    flaw['FaultID'] = '86'
+                    flaw['Rate'] = score
+                    flaw['PointS'] = location
+                    flaw['PointE'] = (location[0] + ww, location[1] + ww)
+                    result.append(flaw)
 
             ####返回json格式示例#####
             img_data = {}
@@ -226,7 +257,9 @@ class XrayDetectorHandler:
             img_data['StatusCode'] = 0
 
             img_data['Result'] = result
-            img_data['Note'] = ''
+            img_data['Note'] = f'Image size: {r_h} x {r_w}'
+            img_data['DetectTime'] = f'{time.time() - t0:.2f}'
+
             img_data_json = json.dumps(img_data)
 
             ###logging示例###
@@ -255,6 +288,23 @@ class XrayDetectorHandler:
                 if not p.is_alive():
                     p.join(1)
                     pids.remove(p)
+                    if model_num >= cfg["model_memory_num"]:
+                        delete = pool.apply_async(del_func)
+                        deleteSide = poolSide.apply_async(del_func)
+                        del_spec = delete.get(timeout=2)
+                        deleteSide.wait(timeout=2)
+                        model_num -= 1
+                        print(del_spec)
+                        with open(f'xuadetect/loadlist/{del_spec}', "w") as f:
+                            pass
+                    load = pool.apply_async(load_func, (spec_name, False))
+                    loadSide = poolSide.apply_async(load_func, (spec_name, True))
+                    load.wait(timeout=2)
+                    loadSide.wait(timeout=2)
+                    model_num += 1
+                    if os.path.exists(f'xuadetect/loadlist/{spec_name}'):
+                        os.remove(f'xuadetect/loadlist/{spec_name}')
+
 
             return img_data_json
 
@@ -322,7 +372,8 @@ if __name__ == '__main__':
     print(cfg)
 
     gLogger = GlobLogger()
-    debugMode = False
+    debugMode = True
+    model_num = 0
 
     ##多线程锁
     lockMain = threading.Lock()
@@ -330,8 +381,8 @@ if __name__ == '__main__':
 
     ####spawn task !!!###
     ctx = multiprocessing.get_context('spawn')
-    pool = ctx.Pool(1, init_uadetect_func)
-    poolSide = ctx.Pool(1, init_uadetectSide_func)
+    pool = ctx.Pool(1, init_uadetect_func, (False,))
+    poolSide = ctx.Pool(1, init_uadetect_func, (True,))
 
     # handler signal SIGTERM  需要关掉其它相关进程
     signal.signal(signal.SIGTERM, sigterm)
@@ -348,6 +399,8 @@ if __name__ == '__main__':
     # 创建服务端
     server = TServer.TThreadedServer(processor, transport, tfactory, pfactory)
     # server.setNumThreads(4)
+    with open(f'xuadetect/loadlist/12R225-18PR-AZ189-1614', "w") as f1, open(f'xuadetect/loadlist/700R16-8PR-EZ525-1614', "w") as f2, open(f'xuadetect/loadlist/xxxxxxx-yyyyyy-2000', "w") as f3:
+        pass
     print("Starting main thrift server for UADetect...")
     server.serve()
     print("UADetect thrift server ends.")

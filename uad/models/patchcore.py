@@ -24,6 +24,8 @@ from scipy.ndimage import gaussian_filter
 from ..utils.utils_torch import cdist, my_cdist, cholesky_inverse, mahalanobis, mahalanobis_einsum, orthogonal, svd_orthogonal
 from ..utils.k_center_greedy_torch import KCenterGreedy, my_KCenterGreedy
 
+import time
+
 models = {
     "resnet18": resnet18,
     "resnet50": resnet50,
@@ -286,9 +288,18 @@ class PaDiMPlus(nn.Module):
 
 
 class PatchCore_torch(PaDiMPlus):
-    def load(self, state):
-        self.memory_bank = state['memory_bank'].cuda()
-
+    def __init__(self, arch='resnet18', pretrained=True, k=0.1, method='sample'):
+        super().__init__(arch=arch, pretrained=pretrained, k=k, method=method)
+        self.memory_banks = {}
+        self.used_time = {}
+    def load(self, state, spec_name):
+        self.memory_banks[spec_name] = state['memory_bank'].cuda()
+        self.used_time[spec_name] = time.time()
+    def delete_earliest(self):
+        earliest_key = min(self.used_time.keys(), key=lambda k:self.used_time[k])
+        del self.used_time[earliest_key]
+        torch.cuda.empty_cache()
+        return earliest_key
     def clean_stats(self, set_None=True):
         if set_None:
             self.memory_bank = None
@@ -359,11 +370,12 @@ class PatchCore_torch(PaDiMPlus):
         # no per project
         return x  # super().project(x, return_HWBC)
 
-    def generate_scores_map(self, embedding, out_shape, gaussian_blur=True):
+    def generate_scores_map(self, embedding, out_shape, gaussian_blur=True, spec_name=''):
+        self.used_time[spec_name] = time.time()
         # Nearest Neighbours distances
         B, C, H, W = embedding.shape
         embedding = embedding.permute((0, 2, 3, 1)).reshape((B, H * W, C))
-        distances = self.nearest_neighbors(embedding=embedding, n_neighbors=9)
+        distances = self.nearest_neighbors(embedding=embedding, n_neighbors=9, spec_name=spec_name)
         distances = distances.permute((2, 0, 1))  # n_neighbors, B, HW
         image_score = []
         for i in range(B):
@@ -373,14 +385,14 @@ class PatchCore_torch(PaDiMPlus):
         score_map = postporcess_score_map(distances, out_shape, gaussian_blur)
         return score_map, np.array(image_score)
 
-    def nearest_neighbors(self, embedding, n_neighbors: int=9):
+    def nearest_neighbors(self, embedding, n_neighbors: int=9, spec_name=''):
         """Compare embedding Features with the memory bank to get Nearest Neighbours distance
         """
         B, HW, C = embedding.shape
-        n_coreset = self.memory_bank.shape[0]
+        n_coreset = self.memory_banks[spec_name].shape[0]
         distances = []  # paddle.zeros((B, HW, n_coreset))
         for i in range(B):
-            distances.append(torch.cdist(embedding[i, :, :], self.memory_bank, p=2.0))  # euclidean norm
+            distances.append(torch.cdist(embedding[i, :, :], self.memory_banks[spec_name], p=2.0))  # euclidean norm
         distances = torch.stack(distances, 0)
         distances, _ = distances.topk(k=n_neighbors, axis=-1, largest=False)
         return distances  # B,
