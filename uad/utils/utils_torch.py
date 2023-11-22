@@ -348,8 +348,8 @@ def plot_fig(test_img,
         heat_map = scores[i] * 255
         mask = copy.deepcopy(scores[i])
         mask = (mask > threshold) + 0
-        # kernel = morphology.disk(4)
-        # mask = morphology.opening(mask, kernel)
+        kernel = morphology.disk(4)
+        mask = morphology.opening(mask, kernel)
         mask *= 255     
         vis_img = mark_boundaries(img, mask, color=(1, 0, 0), mode='thick')    
         fig_img, ax_img = plt.subplots(1, 4 + with_gt, figsize=(12, 3))

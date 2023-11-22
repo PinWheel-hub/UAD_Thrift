@@ -288,7 +288,7 @@ class PaDiMPlus(nn.Module):
 
 
 class PatchCore_torch(PaDiMPlus):
-    def __init__(self, arch='resnet18', pretrained=True, k=0.1, method='sample'):
+    def __init__(self, arch='resnet18', pretrained=True, k=0.1, method='sample', blocks=[1, 1]):
         super().__init__(arch=arch, pretrained=pretrained, k=k, method=method)
         self.memory_banks = {}
         self.used_time = {}
@@ -296,10 +296,14 @@ class PatchCore_torch(PaDiMPlus):
         self.memory_banks[spec_name] = state['memory_bank'].cuda()
         self.used_time[spec_name] = time.time()
     def delete_earliest(self):
-        earliest_key = min(self.used_time.keys(), key=lambda k:self.used_time[k])
+        earliest_key = min(self.used_time.keys(), key=lambda k: self.used_time[k])
         del self.used_time[earliest_key]
+        del self.memory_banks[earliest_key]
         torch.cuda.empty_cache()
         return earliest_key
+    def spec_exist(self, spec_name):
+        return spec_name in self.memory_banks
+
     def clean_stats(self, set_None=True):
         if set_None:
             self.memory_bank = None
@@ -346,6 +350,8 @@ class PatchCore_torch(PaDiMPlus):
 
     @torch.no_grad()
     def compute_stats(self, embedding):
+        C = embedding.shape[1]
+        embedding = embedding.permute((0, 2, 3, 1)).reshape((-1, C))
         print("Creating CoreSet Sampler via k-Center Greedy")
         sampler = KCenterGreedy(embedding, sampling_ratio=self.k)
         del embedding
@@ -412,12 +418,24 @@ class PatchCore_torch(PaDiMPlus):
     
 
 class local_coreset(PaDiMPlus):
-    def __init__(self, arch='resnet18', pretrained=True, k=0.1, method='sample', blocks=[8, 8], feature_size=[32, 32]):
+    def __init__(self, arch='resnet18', pretrained=True, k=0.1, method='sample', blocks=[1, 4], feature_size=[32, 32]):
         super().__init__(arch=arch, pretrained=pretrained, k=k, method=method)
         self.blocks = blocks
         self.feature_size = feature_size
-    def load(self, state):
-        self.memory_bank = state['memory_bank'].cuda()
+        self.memory_banks = {}
+        self.used_time = {}
+    def load(self, state, spec_name):
+        self.memory_banks[spec_name] = state['memory_bank'].cuda()
+        self.used_time[spec_name] = time.time()
+    def delete_earliest(self):
+        earliest_key = min(self.used_time.keys(), key=lambda k: self.used_time[k])
+        del self.used_time[earliest_key]
+        del self.memory_banks[earliest_key]
+        torch.cuda.empty_cache()
+        return earliest_key
+    
+    def spec_exist(self, spec_name):
+        return spec_name in self.memory_banks
 
     def clean_stats(self, set_None=True):
         if set_None:
@@ -476,23 +494,21 @@ class local_coreset(PaDiMPlus):
         x = self.model.layer1(x)
         x = self.model.layer2(x)
 
-        q = avep(x)
-        k = avep(x)
-        v = avep(x)
-        out = self.attention(q, k, v)
-        out = out + avep(x)
-        # out = torch.concat((out, maxp(x)), dim=1)
-        res.append(out)
+        # q = avep(x)
+        # k = avep(x)
+        # v = avep(x)
+        # out = self.attention(q, k, v)
+        # out = out + avep(x)
+        res.append(avep(x))
 
         x = self.model.layer3(x)
 
-        q = avep(x)
-        k = avep(x)
-        v = avep(x)
-        out = self.attention(q, k, v)
-        out = out + avep(x)
-        # out = torch.concat((out, pool(x)), dim=1)
-        res.append(out)
+        # q = avep(x)
+        # k = avep(x)
+        # v = avep(x)
+        # out = self.attention(q, k, v)
+        # out = out + avep(x)
+        res.append(avep(x))
         
         res[1] = F.interpolate(res[1], scale_factor=2, mode="nearest")
         res = torch.cat(res, 1)
@@ -501,17 +517,19 @@ class local_coreset(PaDiMPlus):
     @torch.no_grad()
     def compute_stats(self, embedding):
         C = embedding.shape[1]
-        my_embedding = embedding.permute((2, 3, 0, 1)).reshape((self.blocks[0], 
+        embedding = embedding.permute((2, 3, 0, 1)).reshape((self.blocks[0], 
                                                                 self.feature_size[0] // self.blocks[0], 
                                                                 self.blocks[1], 
                                                                 self.feature_size[1] // self.blocks[1], 
                                                                 -1, C))
-        my_embedding = my_embedding.permute((0, 2, 1, 3, 4, 5)).reshape((self.blocks[0], 
+        embedding = embedding.permute((0, 2, 1, 3, 4, 5)).reshape((self.blocks[0], 
                                                                          self.blocks[1], 
                                                                          -1, C))
         # embedding = embedding.permute((0, 2, 3, 1)).reshape((-1, C))
         print("Creating CoreSet Sampler via k-Center Greedy")
-        sampler = my_KCenterGreedy(my_embedding, sampling_ratio=self.k)
+        sampler = my_KCenterGreedy(embedding, sampling_ratio=self.k)
+        del embedding
+        torch.cuda.empty_cache()
         print("Getting the coreset from the main embedding.")
         coreset = sampler.sample_coreset()
         print(
@@ -532,7 +550,8 @@ class local_coreset(PaDiMPlus):
         # no per project
         return x  # super().project(x, return_HWBC)
 
-    def generate_scores_map(self, embedding, out_shape, gaussian_blur=True):
+    def generate_scores_map(self, embedding, out_shape, gaussian_blur=True, spec_name=''):
+        self.used_time[spec_name] = time.time()
         # Nearest Neighbours distances
         B, C, H, W = embedding.shape
         my_embedding = embedding.permute((2, 3, 0, 1)).reshape((self.blocks[0], 
@@ -544,7 +563,7 @@ class local_coreset(PaDiMPlus):
                                                                          self.blocks[1], 
                                                                          -1, C)).unsqueeze(0)
         # embedding = embedding.permute((0, 2, 3, 1)).reshape((B, H * W, C))
-        distances = self.nearest_neighbors(embedding=my_embedding, n_neighbors=9)
+        distances = self.nearest_neighbors(embedding=my_embedding, n_neighbors=9, spec_name=spec_name)
         distances = distances.permute((2, 0, 1))  # n_neighbors, B, HW
         image_score = []
         for i in range(B):
@@ -554,14 +573,14 @@ class local_coreset(PaDiMPlus):
         score_map = postporcess_score_map(distances, out_shape, gaussian_blur)
         return score_map, np.array(image_score)
 
-    def nearest_neighbors(self, embedding, n_neighbors: int=9):
+    def nearest_neighbors(self, embedding, n_neighbors: int=9, spec_name=''):
         """Compare embedding Features with the memory bank to get Nearest Neighbours distance
         """
         B, H, W, N, C = embedding.shape
-        n_coreset = self.memory_bank.shape[-2]
+        n_coreset = self.memory_banks[spec_name].shape[-2]
         distances = []  # paddle.zeros((B, HW, n_coreset))
         for i in range(B):
-            distances.append(my_cdist(embedding[i, :, :, :, :], self.memory_bank, feature_size=self.feature_size))  # euclidean norm
+            distances.append(my_cdist(embedding[i, :, :, :, :], self.memory_banks[spec_name], feature_size=self.feature_size))  # euclidean norm
         distances = torch.stack(distances, 0)
         distances, _ = distances.topk(k=n_neighbors, axis=-1, largest=False)
         return distances  # B,

@@ -23,7 +23,7 @@ from thrift.protocol import TBinaryProtocol
 from thrift.server import TServer
 from io import BytesIO
 
-from uadetect import init_uadetect_func, uadetect_func, load_func, del_func
+from uadetect import init_uadetect_func, uadetect_func, load_func, del_func, model_exist
 from uatraining import TrainingProc
 
 #规范使用logging utility
@@ -108,12 +108,33 @@ class XrayDetectorHandler:
         """
         return ''
 
+    def remove_white_cols(self, img_cv):
+        # 将图像转换为灰度图
+        gray = cv2.cvtColor(img_cv, cv2.COLOR_BGR2GRAY)
+
+        # 获取图像列的平均亮度
+        col_means = np.mean(gray, axis=0)
+        threshold = np.mean(col_means)
+        mask = col_means < threshold
+        # 找到第一个和最后一个非白色列的索引
+        first_col = np.argmax(mask)
+
+        # 找到最后一个 True 的位置
+        last_col = len(mask) - 1 - np.argmax(np.flip(mask))
+
+        # 从原始图像中裁剪除去白色条纹的部分
+        result = img_cv[:, first_col: last_col]
+
+        return result, first_col
+
     ###########################################
     #目前唯一的服务入口
     ###########################################
     def service_detector(self, img_data):
         global procFlag, pids, model_num
-        statuscode = 500
+        statuscode = '500'
+        ratio_h = 2
+        ratio_w = 2
         try:
             result = []
             t0 = time.time()
@@ -131,39 +152,44 @@ class XrayDetectorHandler:
             if len(imgBig.shape) != 3:
                 raise Exception("Invalid image shape: %s %d" % (img_name, len(imgBig.shape)))
             r_h, r_w, _ = imgBig.shape
+            if r_w > 2000:
+                ratio_w *= 2
 
             ###本服务会发生多线程重入，如果线程之间需要排队处理，请加锁
             ###也就是说会有可能两张不同规格图片同时运行
             with lockMain:
                 procFlag = len(pids) > 0
                 ###各总检查，模型是否存在
-                if os.path.exists(f'xuadetect/loadlist/{spec_name}'):
+                exist = pool.apply_async(model_exist, (spec_name,))
+                existSide = poolSide.apply_async(model_exist, (spec_name,))
+                if exist.get() and existSide.get():
+                    pass
+                elif os.path.exists(f'xuadetect/loadlist/{spec_name}'):
                     if model_num >= cfg["model_memory_num"]:
                         delete = pool.apply_async(del_func)
                         deleteSide = poolSide.apply_async(del_func)
                         del_spec = delete.get(timeout=2)
                         deleteSide.wait(timeout=2)
                         model_num -= 1
-                        print(del_spec)
                         with open(f'xuadetect/loadlist/{del_spec}', "w") as f:
                             pass
-                    load = pool.apply_async(load_func, (spec_name, False))
-                    loadSide = poolSide.apply_async(load_func, (spec_name, True))
+                    load = pool.apply_async(load_func, (spec_name,))
+                    loadSide = poolSide.apply_async(load_func, (spec_name,))
                     load.wait(timeout=2)
                     loadSide.wait(timeout=2)
                     model_num += 1
                     
                     if os.path.exists(f'xuadetect/loadlist/{spec_name}'):
                         os.remove(f'xuadetect/loadlist/{spec_name}')
-                elif not os.path.exists(f'xuadetect/models/{spec_name}.pth'):
-                    if not os.path.exists(f'xuadetect/img_raw/{spec_name}'):
-                        os.makedirs(f'xuadetect/img_raw/{spec_name}')
+                elif not os.path.exists(f'xuadetect/models/{spec_name}.pth') or not os.path.exists(f'xuadetect/models/{spec_name}_side.pth'):
                     if os.path.exists(f'xuadetect/trainlist/{spec_name}'):
                         if not procFlag:
                             procFlag = True
                             spawnBackGroundWorker(spec_name)  ##此处一定需要线程锁！！
-                        statuscode = 200
+                        statuscode = '200'
                         raise Exception("Model training.")
+                    if not os.path.exists(f'xuadetect/img_raw/{spec_name}'):
+                        os.makedirs(f'xuadetect/img_raw/{spec_name}')
                     cv2.imwrite(f'xuadetect/img_raw/{spec_name}/{img_name}.jpg', imgBig)
                     img_num = len(os.listdir(f'xuadetect/img_raw/{spec_name}'))
                     if img_num >= cfg['img_raw_num']:
@@ -172,21 +198,26 @@ class XrayDetectorHandler:
                         if not procFlag:
                             procFlag = True
                             spawnBackGroundWorker(spec_name)  ##此处一定需要线程锁！！
-                        statuscode = 200
+                        statuscode = '200'
                         raise Exception("Model training.")
                     else:
-                        statuscode = img_num
+                        statuscode = str(img_num)
                         raise Exception("No models.")
+                else:
+                    with open(f'xuadetect/loadlist/{spec_name}', "w") as f:
+                        pass
+                    statuscode = '250'
+                    raise Exception("model not loaded.")
 
                 ##缩小与裁切处理
-                ratioxy = 2
-                img = cv2.resize(imgBig, (int(r_w // ratioxy), int(r_h // ratioxy)), interpolation=cv2.INTER_CUBIC)
+                img = cv2.resize(imgBig, (int(r_w // ratio_w), int(r_h // ratio_h)), interpolation=cv2.INTER_CUBIC)
+                img, first_col = self.remove_white_cols(img)
                 image_h, image_w, _ = img.shape
                 # 。。。。。。。
                 col_num = 3
                 ww = image_w // col_num
                 hh = ww
-                dh = int(0 * image_h)
+                dh = cfg["overlap_pixels"] // ratio_h
                 part_images = []
                 part_images_side = []
                 part_locations = []
@@ -196,17 +227,18 @@ class XrayDetectorHandler:
                     for c in range(col_num):
                         x1 = ww * c
                         y1 = min(l * (hh - dh), image_h - hh)
+                        if y1 + hh > image_h - cfg["remove_pixels"] // ratio_h:
+                            break
                         if c == 0:
                             part_images_side.append(img[y1:y1 + hh, x1:x1 + ww, :])
-                            part_locations_side.append((y1 * ratioxy, x1 * ratioxy))
+                            part_locations_side.append((y1, x1))
                         elif c == col_num - 1:
                             part_images_side.append(cv2.flip(img[y1:y1 + hh, x1:x1 + ww, :], 1))
-                            part_locations_side.append((y1 * ratioxy, x1 * ratioxy))
+                            part_locations_side.append((y1, x1))
                         else:
                             part_images.append(img[y1:y1 + hh, x1:x1 + ww, :])
-                            part_locations.append((y1 * ratioxy, x1 * ratioxy))
+                            part_locations.append((y1, x1))
                         
-
             ###本服务会发生多线程重入，如果线程之间需要排队处理，请加锁
             ###也就是说会有可能两张不同规格图片同时运行
             with lockMain:
@@ -214,9 +246,9 @@ class XrayDetectorHandler:
                 retlist=[]
                 retlistSide=[]
                 for i, part in enumerate(part_images):
-                    retlist.append(pool.apply_async(uadetect_func, (part, spec_name, part_locations[i])))
+                    retlist.append(pool.apply_async(uadetect_func, (part, spec_name, part_locations[i], ww, hh)))
                 for i, part in enumerate(part_images_side):
-                    retlistSide.append(poolSide.apply_async(uadetect_func, (part, spec_name, part_locations_side[i])))
+                    retlistSide.append(poolSide.apply_async(uadetect_func, (part, spec_name, part_locations_side[i], ww, hh)))
 
             ##等待识别阶段，务必先解锁
             # time.sleep(1)
@@ -225,36 +257,38 @@ class XrayDetectorHandler:
                 waitresult = ritem.get(timeout=3)
                 ###返回结果处理，仅供参考
                 ###返回需要指示位置坐标
-                (score, location, fault_flag) = waitresult
                 ###################################
                 # 每个flaw记录，需要FaultID，Rate概率，左上坐标(x,y),右下坐标(x,y)
-                if fault_flag:
-                    flaw = {}
-                    flaw['FaultID'] = '85'
-                    flaw['Rate'] = score
-                    flaw['PointS'] = location
-                    flaw['PointE'] = (location[0] + ww, location[1] + ww)
-                    result.append(flaw)
+                for get in waitresult:
+                    if len(get) > 0:
+                        flaw = {}
+                        flaw['FaultID'] = '85'
+                        flaw['Rate'] = f'{get[0]:.3f}'
+                        flaw['RateAdd'] = f'{get[1]:.3f}'
+                        flaw['PointS'] = [str(int(get[2][0] * ratio_h)), str(int(get[2][1] * ratio_w + first_col * ratio_w))]
+                        flaw['PointE'] = [str(int(get[3][0] * ratio_h)), str(int(get[3][1] * ratio_w + first_col * ratio_w))]
+                        result.append(flaw)
 
             for ritem in retlistSide:
                 waitresult = ritem.get(timeout=3)
                 ###返回结果处理，仅供参考
                 ###返回需要指示位置坐标
-                (score, location, fault_flag) = waitresult
                 ###################################
                 # 每个flaw记录，需要FaultID，Rate概率，左上坐标(x,y),右下坐标(x,y)
-                if fault_flag:
-                    flaw = {}
-                    flaw['FaultID'] = '86'
-                    flaw['Rate'] = score
-                    flaw['PointS'] = location
-                    flaw['PointE'] = (location[0] + ww, location[1] + ww)
-                    result.append(flaw)
+                for get in waitresult:
+                    if len(get) > 0:
+                        flaw = {}
+                        flaw['FaultID'] = '86'
+                        flaw['Rate'] = f'{get[0]:.3f}'
+                        flaw['RateAdd'] = f'{get[1]:.3f}'
+                        flaw['PointS'] = [str(int(get[2][0] * ratio_h)), str(int(get[2][1] * ratio_w + first_col * ratio_w))]
+                        flaw['PointE'] = [str(int(get[3][0] * ratio_h)), str(int(get[3][1] * ratio_w + first_col * ratio_w))]
+                        result.append(flaw)
 
             ####返回json格式示例#####
             img_data = {}
             img_data['ID'] = img_name
-            img_data['StatusCode'] = 0
+            img_data['StatusCode'] = '0'
 
             img_data['Result'] = result
             img_data['Note'] = f'Image size: {r_h} x {r_w}'
@@ -288,24 +322,6 @@ class XrayDetectorHandler:
                 if not p.is_alive():
                     p.join(1)
                     pids.remove(p)
-                    if model_num >= cfg["model_memory_num"]:
-                        delete = pool.apply_async(del_func)
-                        deleteSide = poolSide.apply_async(del_func)
-                        del_spec = delete.get(timeout=2)
-                        deleteSide.wait(timeout=2)
-                        model_num -= 1
-                        print(del_spec)
-                        with open(f'xuadetect/loadlist/{del_spec}', "w") as f:
-                            pass
-                    load = pool.apply_async(load_func, (spec_name, False))
-                    loadSide = poolSide.apply_async(load_func, (spec_name, True))
-                    load.wait(timeout=2)
-                    loadSide.wait(timeout=2)
-                    model_num += 1
-                    if os.path.exists(f'xuadetect/loadlist/{spec_name}'):
-                        os.remove(f'xuadetect/loadlist/{spec_name}')
-
-
             return img_data_json
 
 
@@ -399,8 +415,13 @@ if __name__ == '__main__':
     # 创建服务端
     server = TServer.TThreadedServer(processor, transport, tfactory, pfactory)
     # server.setNumThreads(4)
-    with open(f'xuadetect/loadlist/12R225-18PR-AZ189-1614', "w") as f1, open(f'xuadetect/loadlist/700R16-8PR-EZ525-1614', "w") as f2, open(f'xuadetect/loadlist/xxxxxxx-yyyyyy-2000', "w") as f3:
-        pass
+
+    if not os.path.exists('xuadetect/loadlist'):
+        os.makedirs('xuadetect/loadlist/')
+    if not os.path.exists(f'xuadetect/trainlist/'):
+        os.makedirs(f'xuadetect/trainlist/')
+    # with open(f'xuadetect/loadlist/12R225-18PR-AZ189-1614', "w") as f1, open(f'xuadetect/loadlist/700R16-8PR-EZ525-1614', "w") as f2, open(f'xuadetect/loadlist/xxxxxxx-yyyyyy-2000', "w") as f3:
+    #     pass
     print("Starting main thrift server for UADetect...")
     server.serve()
     print("UADetect thrift server ends.")
