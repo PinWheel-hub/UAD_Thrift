@@ -1,9 +1,12 @@
 {
-    "img_raw_num": 150,
+    "img_raw_num": 200,
+    "padim_train_num": 50,
     "padim_del_rate": 0.2,
     "patchcore_train_num": 800,
     "image_spec_num": 30,
     "model_spec_num": 30,
     "model_disk_lifetime": 30,
-    "model_memory_num": 15
+    "model_memory_num": 15,
+    "overlap_pixels": 100,
+    "remove_pixels": 200
 }
