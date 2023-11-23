@@ -350,8 +350,6 @@ class PatchCore_torch(PaDiMPlus):
 
     @torch.no_grad()
     def compute_stats(self, embedding):
-        C = embedding.shape[1]
-        embedding = embedding.permute((0, 2, 3, 1)).reshape((-1, C))
         print("Creating CoreSet Sampler via k-Center Greedy")
         sampler = KCenterGreedy(embedding, sampling_ratio=self.k)
         del embedding
@@ -516,16 +514,6 @@ class local_coreset(PaDiMPlus):
 
     @torch.no_grad()
     def compute_stats(self, embedding):
-        C = embedding.shape[1]
-        embedding = embedding.permute((2, 3, 0, 1)).reshape((self.blocks[0], 
-                                                                self.feature_size[0] // self.blocks[0], 
-                                                                self.blocks[1], 
-                                                                self.feature_size[1] // self.blocks[1], 
-                                                                -1, C))
-        embedding = embedding.permute((0, 2, 1, 3, 4, 5)).reshape((self.blocks[0], 
-                                                                         self.blocks[1], 
-                                                                         -1, C))
-        # embedding = embedding.permute((0, 2, 3, 1)).reshape((-1, C))
         print("Creating CoreSet Sampler via k-Center Greedy")
         sampler = my_KCenterGreedy(embedding, sampling_ratio=self.k)
         del embedding
