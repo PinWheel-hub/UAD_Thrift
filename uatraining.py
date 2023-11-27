@@ -263,12 +263,12 @@ def train(spec_name, if_side, cfg):
     del out, x
     torch.cuda.empty_cache()
     outs = torch.concat(outs, 0)
-    C = outs.shape[1]
+    B, C, H, W = outs.shape
     if patchcore_cfg.method == 'local_coreset':  
         outs = outs.permute((2, 3, 0, 1)).reshape((model.blocks[0], 
-                                                            model.feature_size[0] // model.blocks[0], 
+                                                            H // model.blocks[0], 
                                                             model.blocks[1], 
-                                                            model.feature_size[1] // model.blocks[1], 
+                                                            W // model.blocks[1], 
                                                             -1, C))
         outs = outs.permute((0, 2, 1, 3, 4, 5)).reshape((model.blocks[0], 
                                                                 model.blocks[1], 

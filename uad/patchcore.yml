@@ -2,15 +2,15 @@
 device: [cuda:0, cuda:1]
 seed: 3
 backbone: resnet18  # Support resnet18, resnet50, wide_resnet50_2
-method: coreset # projection method, one of [sample, ortho, svd_ortho, gaussian, coreset, local_coreset]
-blocks: [1, 4]
+method: local_coreset # projection method, one of [sample, ortho, svd_ortho, gaussian, coreset, local_coreset]
+blocks: [1, 3]
 k: 0.1  # using features
 
 batch_size: 1
 num_workers: 0
 max_img: 1000
-resize: [256, 256]
-crop_size: [256, 256]
+resize: [288, 288]
+crop_size: [288, 288]
 
 threshold: 1.7
 threshold_side: 1.7

@@ -416,10 +416,9 @@ class PatchCore_torch(PaDiMPlus):
     
 
 class local_coreset(PaDiMPlus):
-    def __init__(self, arch='resnet18', pretrained=True, k=0.1, method='sample', blocks=[1, 4], feature_size=[32, 32]):
+    def __init__(self, arch='resnet18', pretrained=True, k=0.1, method='sample', blocks=[1, 4]):
         super().__init__(arch=arch, pretrained=pretrained, k=k, method=method)
         self.blocks = blocks
-        self.feature_size = feature_size
         self.memory_banks = {}
         self.used_time = {}
     def load(self, state, spec_name):
@@ -542,10 +541,11 @@ class local_coreset(PaDiMPlus):
         self.used_time[spec_name] = time.time()
         # Nearest Neighbours distances
         B, C, H, W = embedding.shape
+        self.feature_size = [H, W]
         my_embedding = embedding.permute((2, 3, 0, 1)).reshape((self.blocks[0], 
-                                                                self.feature_size[0] // self.blocks[0], 
+                                                                H // self.blocks[0], 
                                                                 self.blocks[1], 
-                                                                self.feature_size[1] // self.blocks[1], 
+                                                                W // self.blocks[1], 
                                                                 -1, C))
         my_embedding = my_embedding.permute((0, 2, 1, 3, 4, 5)).reshape((self.blocks[0], 
                                                                          self.blocks[1], 
