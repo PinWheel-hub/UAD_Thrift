@@ -48,7 +48,7 @@ transport.open()
 
 import json
 
-path = '/data2/chen/uad-tire/3-常用规格整理/12R225-18PR-AZ189-金冠无内#1614/defect/C3C1D21505.jpg'
+path = '/data2/chen/uad-tire/3-常用规格整理/12R225-18PR-AZ189-金冠无内#1614/defect/F3C4D20127_1.png'
 id = f'C3D1D21173.12R225-18PR-AZ189-1614'  ###  文件名.规格名  ！！！
 bytes=[]
 with open(path,'rb') as fp:

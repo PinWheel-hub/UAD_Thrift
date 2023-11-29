@@ -133,8 +133,8 @@ class XrayDetectorHandler:
     def service_detector(self, img_data):
         global procFlag, pids, model_num
         statuscode = '500'
-        ratio_h = 2
-        ratio_w = 2
+        ratio_h = 1
+        ratio_w = 1
         try:
             result = []
             t0 = time.time()
@@ -284,6 +284,7 @@ class XrayDetectorHandler:
                         flaw['RateAdd'] = f'{get[1]:.3f}'
                         flaw['PointS'] = [str(int(get[2][1] * ratio_w + first_col * ratio_w)), str(int(get[2][0] * ratio_h))]
                         flaw['PointE'] = [str(int(get[3][1] * ratio_w + first_col * ratio_w)), str(int(get[3][0] * ratio_h))]
+                        result.append(flaw)
 
             ####返回json格式示例#####
             img_data = {}
