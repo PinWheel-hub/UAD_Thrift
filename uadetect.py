@@ -93,7 +93,6 @@ def uadetect_func(part, spec_name, part_location, ww, hh):
 
 def load_func(spec_name):
     global model, if_side
-    print(if_side)
     state = torch.load('xuadetect/models/{}.pth'.format(spec_name if not if_side else f'{spec_name}_side'))
     model.load(state["stats"], spec_name)
 

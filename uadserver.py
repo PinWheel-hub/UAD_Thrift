@@ -154,6 +154,7 @@ class XrayDetectorHandler:
             r_h, r_w, _ = imgBig.shape
             if r_w > 2000:
                 ratio_w *= 2
+                ratio_h *= 1.5
 
             ###本服务会发生多线程重入，如果线程之间需要排队处理，请加锁
             ###也就是说会有可能两张不同规格图片同时运行
@@ -215,9 +216,9 @@ class XrayDetectorHandler:
                 image_h, image_w, _ = img.shape
                 # 。。。。。。。
                 col_num = 3
-                ww = image_w // col_num
+                ww = int(image_w // col_num)
                 hh = ww
-                dh = cfg["overlap_pixels"] // ratio_h
+                dh = int(cfg["overlap_pixels"] // ratio_h)
                 part_images = []
                 part_images_side = []
                 part_locations = []
@@ -228,7 +229,7 @@ class XrayDetectorHandler:
                         x1 = ww * c
                         y1 = min(l * (hh - dh), image_h - hh)
                         if y1 + hh > image_h - cfg["remove_pixels"] // ratio_h:
-                            break
+                            y1 = int(image_h - cfg["remove_pixels"] // ratio_h - hh)
                         if c == 0:
                             part_images_side.append(img[y1:y1 + hh, x1:x1 + ww, :])
                             part_locations_side.append((y1, x1))
@@ -265,8 +266,8 @@ class XrayDetectorHandler:
                         flaw['FaultID'] = '85'
                         flaw['Rate'] = f'{get[0]:.3f}'
                         flaw['RateAdd'] = f'{get[1]:.3f}'
-                        flaw['PointS'] = [str(int(get[2][0] * ratio_h)), str(int(get[2][1] * ratio_w + first_col * ratio_w))]
-                        flaw['PointE'] = [str(int(get[3][0] * ratio_h)), str(int(get[3][1] * ratio_w + first_col * ratio_w))]
+                        flaw['PointS'] = [str(int(get[2][1] * ratio_w + first_col * ratio_w)), str(int(get[2][0] * ratio_h))]
+                        flaw['PointE'] = [str(int(get[3][1] * ratio_w + first_col * ratio_w)), str(int(get[3][0] * ratio_h))]
                         result.append(flaw)
 
             for ritem in retlistSide:
@@ -281,9 +282,8 @@ class XrayDetectorHandler:
                         flaw['FaultID'] = '86'
                         flaw['Rate'] = f'{get[0]:.3f}'
                         flaw['RateAdd'] = f'{get[1]:.3f}'
-                        flaw['PointS'] = [str(int(get[2][0] * ratio_h)), str(int(get[2][1] * ratio_w + first_col * ratio_w))]
-                        flaw['PointE'] = [str(int(get[3][0] * ratio_h)), str(int(get[3][1] * ratio_w + first_col * ratio_w))]
-                        result.append(flaw)
+                        flaw['PointS'] = [str(int(get[2][1] * ratio_w + first_col * ratio_w)), str(int(get[2][0] * ratio_h))]
+                        flaw['PointE'] = [str(int(get[3][1] * ratio_w + first_col * ratio_w)), str(int(get[3][0] * ratio_h))]
 
             ####返回json格式示例#####
             img_data = {}

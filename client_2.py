@@ -63,8 +63,8 @@ with open(path,'rb') as fp:
     for result in retjson["Result"]:
         PointS = result['PointS']
         PointE = result['PointE']
-        cv2.rectangle(img, (int(PointS[1]), int(PointS[0])), (int(PointE[1]), int(PointE[0])), (0, 255, 0), 1)  # 这里的(0, 255, 0)表示矩形框的颜色，参数2表示线条宽度
+        cv2.rectangle(img, (int(PointS[0]), int(PointS[1])), (int(PointE[0]), int(PointE[1])), (0, 255, 0), 1)  # 这里的(0, 255, 0)表示矩形框的颜色，参数2表示线条宽度
         font = cv2.FONT_HERSHEY_SIMPLEX
-        cv2.putText(img, f'{result["RateAdd"]}, {result["Rate"]}', (int(PointS[1]), int(PointS[0])), font, 0.9, (0, 255, 0), 1, cv2.LINE_AA)
+        cv2.putText(img, f'{result["RateAdd"]}, {result["Rate"]}', (int(PointS[0]), int(PointS[1])), font, 0.9, (0, 255, 0), 1, cv2.LINE_AA)
     cv2.imwrite('result.png', img)
 transport.close()

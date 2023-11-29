@@ -148,17 +148,7 @@ def padim_sort(spec_name, if_side, cfg):
         distances = distances.reshape((B, H, W))
         distances = torch.sqrt(distances)
 
-        # upsample
-        score_map = F.interpolate(
-            distances.unsqueeze(1),
-            size=x.shape[2:],
-            mode='bilinear',
-            align_corners=False).squeeze(1).cpu().numpy()
-        # apply gaussian smoothing on the score map
-        for i in range(score_map.shape[0]):
-            score_map[i] = gaussian_filter(score_map[i], sigma=4)
-
-        max_score = score_map.max()
+        max_score = distances.max()
         index = img_file.rfind('_', 0, img_file.rfind('_'))
         img = img_file[:index]
         if img not in results:
@@ -335,10 +325,10 @@ def TrainingProc(spec_name, cfg):
     for img_num, img_file in enumerate(img_files):
         img = cv2.imread(os.path.join(img_dir, img_file))
         if img.shape[1] > 2000:
-            img = cv2.resize(img, (img.shape[1] // 2, img.shape[0]), interpolation=cv2.INTER_CUBIC)
+            img = cv2.resize(img, (img.shape[1] // 2, int(img.shape[0] // 1.5)), interpolation=cv2.INTER_CUBIC)
         img, _ = remove_white_cols(img) 
         i = 0
-        patch_length = img.shape[1] // col_num
+        patch_length = int(img.shape[1] // col_num)
         row_num = img.shape[0] // patch_length
         for i in range(0, row_num):
             random_num = system_random.randint(0, 1)
