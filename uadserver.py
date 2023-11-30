@@ -265,7 +265,7 @@ class XrayDetectorHandler:
                         flaw = {}
                         flaw['FaultID'] = '85'
                         flaw['Rate'] = f'{get[0]:.3f}'
-                        flaw['RateAdd'] = f'{get[1]:.3f}'
+                        flaw['RateAdd'] = str(int(get[1]))
                         flaw['PointS'] = [str(int(get[2][1] * ratio_w + first_col * ratio_w)), str(int(get[2][0] * ratio_h))]
                         flaw['PointE'] = [str(int(get[3][1] * ratio_w + first_col * ratio_w)), str(int(get[3][0] * ratio_h))]
                         result.append(flaw)
@@ -281,7 +281,7 @@ class XrayDetectorHandler:
                         flaw = {}
                         flaw['FaultID'] = '86'
                         flaw['Rate'] = f'{get[0]:.3f}'
-                        flaw['RateAdd'] = f'{get[1]:.3f}'
+                        flaw['RateAdd'] = str(int(get[1]))
                         flaw['PointS'] = [str(int(get[2][1] * ratio_w + first_col * ratio_w)), str(int(get[2][0] * ratio_h))]
                         flaw['PointE'] = [str(int(get[3][1] * ratio_w + first_col * ratio_w)), str(int(get[3][0] * ratio_h))]
                         result.append(flaw)

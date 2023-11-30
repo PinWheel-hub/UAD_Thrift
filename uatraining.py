@@ -338,12 +338,12 @@ def TrainingProc(spec_name, cfg):
                 # elif img.shape[0] - patch_length * i > patch_length / 2:
                 #     rg = img[img.shape[0] - patch_length: img.shape[0], patch_length * j: patch_length * (j + 1)]
                 else:
-                    break
-                if (random_num == 0 and j == 0) or (random_num == 1 and j == 2):
+                    break              
+                if random_list[img_num] < cfg['padim_train_num'] and not (random_num == 0 and j == 0) and not (random_num == 1 and j == 2):
+                    cv2.imwrite(os.path.join(padim_dir if j == 1 else padim_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
+                if (random_list[img_num] < int(len(img_files) // 2) and j == 0) or (random_list[img_num] >= len(img_files) // 2 and j == 2):
                     continue
                 cv2.imwrite(os.path.join(save_dir if j == 1 else save_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
-                if random_list[img_num] < cfg['padim_train_num']:
-                    cv2.imwrite(os.path.join(padim_dir if j == 1 else padim_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
                     
 
     process = multiprocessing.Process(target=train, args=(spec_name, False, cfg))
