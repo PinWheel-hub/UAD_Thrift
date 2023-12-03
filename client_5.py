@@ -28,14 +28,14 @@ transport.open()
 
 #连接可以重复使用，在实际应用时需要考虑发生异常重新建立连接
 
-img_folder = '/data2/chen/uad-tire/3-常用规格整理/12R225-18PR-AZ189-金冠无内#3456/normal'
+img_folder = '/data2/chen/uad-tire/3-常用规格整理/700R16-8PR-EZ525-朝阳无内#3456/normal'
 files = os.listdir(img_folder)
 for file in files:
     path = os.path.join(img_folder, file)
     if cv2.imread(path).shape[1] <= 2000:
-        specid = '12R225-18PR-AZ189-1614'
+        specid = '700R16-8PR-EZ525-1614'
     else:
-        specid = '12R225-18PR-AZ189-3456'
+        specid = '700R16-8PR-EZ525-3456'
     id = f'{os.path.splitext(file)[0]}.{specid}'  ###  文件名.规格名  ！！！
     bytes=[]
     with open(path,'rb') as fp:
