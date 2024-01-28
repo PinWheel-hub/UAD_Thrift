@@ -49,7 +49,7 @@ transport.open()
 import json
 
 path = '/data2/chen/uad-tire/3-常用规格整理/650R16-12PR-CR926-朝阳#1614/defect/E3L2B20282.jpg'
-id = f'C3D1D21173.650R16-12PR-CR926-16142'  ###  文件名.规格名  ！！！
+id = f'C3D1D21173.650R16-12PR-CR926-1614'  ###  文件名.规格名  ！！！
 bytes=[]
 with open(path,'rb') as fp:
     bytes = fp.read()

@@ -178,10 +178,11 @@ class XrayDetectorHandler:
                     loadSide = poolSide.apply_async(load_func, (spec_name,))
                     load.wait(timeout=2)
                     loadSide.wait(timeout=2)
-                    model_num += 1
-                    
+                    model_num += 1        
                     if os.path.exists(f'xuadetect/loadlist/{spec_name}'):
                         os.remove(f'xuadetect/loadlist/{spec_name}')
+                    statuscode = '250'
+                    raise Exception("model not loaded.")
                 elif not os.path.exists(f'xuadetect/models/{spec_name}.pth') or not os.path.exists(f'xuadetect/models/{spec_name}_side.pth'):
                     if os.path.exists(f'xuadetect/trainlist/{spec_name}'):
                         if not procFlag:
@@ -205,8 +206,21 @@ class XrayDetectorHandler:
                         statuscode = str(img_num)
                         raise Exception("No models.")
                 else:
-                    with open(f'xuadetect/loadlist/{spec_name}', "w") as f:
-                        pass
+                    # with open(f'xuadetect/loadlist/{spec_name}', "w") as f:
+                    #     pass
+                    if model_num >= cfg["model_memory_num"]:
+                        delete = pool.apply_async(del_func)
+                        deleteSide = poolSide.apply_async(del_func)
+                        del_spec = delete.get(timeout=2)
+                        deleteSide.wait(timeout=2)
+                        model_num -= 1
+                        with open(f'xuadetect/loadlist/{del_spec}', "w") as f:
+                            pass
+                    load = pool.apply_async(load_func, (spec_name,))
+                    loadSide = poolSide.apply_async(load_func, (spec_name,))
+                    load.wait(timeout=2)
+                    loadSide.wait(timeout=2)
+                    model_num += 1
                     statuscode = '250'
                     raise Exception("model not loaded.")
 
