@@ -51,7 +51,7 @@ def padim_sort(spec_name, if_side, cfg):
         train_dataset,
         batch_size=padim_cfg.batch_size,
         num_workers=padim_cfg.num_workers)
-    fins = {"resnet18": 448, "resnet50": 1792, "wide_resnet50_2": 1792}
+    fins = {"resnet18": 448, "resnet50": 1792, "wide_resnet50_2": 1792, "resnet101": 1792}
     t_d, d = fins[padim_cfg.backbone], 100  # "resnet18": {"orig_dims": 448, "reduced_dims": 100, "emb_scale": 4}
     idx = torch.tensor(sample(range(0, t_d), d))
 
@@ -164,10 +164,7 @@ def padim_sort(spec_name, if_side, cfg):
     torch.cuda.empty_cache()
     return sorted_results, img_dic
 
-def trainset_generate(spec_name, if_side, cfg, sorted_results={}, img_dic={}):
-    patchcore_trainset = 'xuadetect/img_cut/{}/patchcore'.format(spec_name if not if_side else f'{spec_name}_side')
-    if not os.path.exists(patchcore_trainset):
-        os.makedirs(patchcore_trainset)
+def trainset_generate(spec_name, if_side, cfg, patchcore_trainset, sorted_results={}, img_dic={}):
     raw_sel = 'xuadetect/img_cut/{}/raw_sel'.format(spec_name if not if_side else f'{spec_name}_side')
     i = 0
     if len(sorted_results) > 0 and len(img_dic) > 0:
@@ -208,12 +205,15 @@ def trainset_generate(spec_name, if_side, cfg, sorted_results={}, img_dic={}):
 #             shutil.move(source_path, target_path)    
 
 def train(spec_name, if_side, cfg):
-    # 用padim算法剔除一定比例的离群图片,然后随机保留定量图片
-    sorted_results, img_dic = padim_sort(spec_name, if_side, cfg)
-    trainset_generate(spec_name, if_side, cfg, sorted_results, img_dic)
     with open('uad/patchcore.yml', 'r') as file:
         patchcore_cfg = yaml.safe_load(file)
-    
+    patchcore_trainset = 'xuadetect/img_cut/{}/patchcore'.format(spec_name if not if_side else f'{spec_name}_side')
+    if not os.path.exists(patchcore_trainset):
+        os.makedirs(patchcore_trainset)
+    if len(os.listdir(patchcore_trainset)) < cfg['patchcore_train_num']:
+        # 用padim算法剔除一定比例的离群图片,然后随机保留定量图片
+        sorted_results, img_dic = padim_sort(spec_name, if_side, cfg)
+        trainset_generate(spec_name, if_side, cfg, patchcore_trainset, sorted_results, img_dic)
     patchcore_cfg = Dic2Obj(patchcore_cfg)
     random.seed(patchcore_cfg.seed)
     np.random.seed(patchcore_cfg.seed)
@@ -318,33 +318,33 @@ def TrainingProc(spec_name, cfg):
         os.makedirs(padim_dir)
     if not os.path.exists(padim_side_dir):
         os.makedirs(padim_side_dir)
-    col_num = 3
-    random_list = list(range(len(img_files)))
-    random.shuffle(random_list)
-    system_random = random.SystemRandom()
-    for img_num, img_file in enumerate(img_files):
-        img = cv2.imread(os.path.join(img_dir, img_file))
-        if img.shape[1] > 2000:
-            img = cv2.resize(img, (img.shape[1] // 2, int(img.shape[0] // 1.5)), interpolation=cv2.INTER_CUBIC)
-        img, _ = remove_white_cols(img) 
-        i = 0
-        patch_length = int(img.shape[1] // col_num)
-        row_num = img.shape[0] // patch_length
-        for i in range(0, row_num):
-            random_num = system_random.randint(0, 1)
-            for j in range(0, col_num):
-                if patch_length * (i + 1) < img.shape[0] - cfg["remove_pixels"]:
-                    rg = img[patch_length * i: patch_length * (i + 1), patch_length * j: patch_length * (j + 1)]
-                # elif img.shape[0] - patch_length * i > patch_length / 2:
-                #     rg = img[img.shape[0] - patch_length: img.shape[0], patch_length * j: patch_length * (j + 1)]
-                else:
-                    break              
-                if random_list[img_num] < cfg['padim_train_num'] and not (random_num == 0 and j == 0) and not (random_num == 1 and j == 2):
-                    cv2.imwrite(os.path.join(padim_dir if j == 1 else padim_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
-                if (random_list[img_num] < int(len(img_files) // 2) and j == 0) or (random_list[img_num] >= int(len(img_files) // 2) and j == 2):
-                    continue
-                cv2.imwrite(os.path.join(save_dir if j == 1 else save_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
-                    
+    if not(len(os.listdir(save_dir)) > cfg['img_raw_num'] and len(os.listdir(save_side_dir)) > cfg['img_raw_num']and len(os.listdir(padim_dir)) > cfg['padim_train_num'] and len(os.listdir(padim_side_dir)) > cfg['padim_train_num']):
+        col_num = 3
+        random_list = list(range(len(img_files)))
+        random.shuffle(random_list)
+        system_random = random.SystemRandom()
+        for img_num, img_file in enumerate(img_files):
+            img = cv2.imread(os.path.join(img_dir, img_file))
+            if img.shape[1] > 2000:
+                img = cv2.resize(img, (img.shape[1] // 2, int(img.shape[0] // 1.5)), interpolation=cv2.INTER_CUBIC)
+            img, _ = remove_white_cols(img) 
+            i = 0
+            patch_length = int(img.shape[1] // col_num)
+            row_num = img.shape[0] // patch_length
+            for i in range(0, row_num):
+                random_num = system_random.randint(0, 1)
+                for j in range(0, col_num):
+                    if patch_length * (i + 1) < img.shape[0] - cfg["remove_pixels"]:
+                        rg = img[patch_length * i: patch_length * (i + 1), patch_length * j: patch_length * (j + 1)]
+                    # elif img.shape[0] - patch_length * i > patch_length / 2:
+                    #     rg = img[img.shape[0] - patch_length: img.shape[0], patch_length * j: patch_length * (j + 1)]
+                    else:
+                        break              
+                    if random_list[img_num] < cfg['padim_train_num'] and not (random_num == 0 and j == 0) and not (random_num == 1 and j == 2):
+                        cv2.imwrite(os.path.join(padim_dir if j == 1 else padim_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
+                    if (random_list[img_num] < int(len(img_files) // 2) and j == 0) or (random_list[img_num] >= int(len(img_files) // 2) and j == 2):
+                        continue
+                    cv2.imwrite(os.path.join(save_dir if j == 1 else save_side_dir, f'{os.path.splitext(img_file)[0]}_{j}_{i}.jpg'), rg if j < 2 else cv2.flip(rg, 1))
 
     process = multiprocessing.Process(target=train, args=(spec_name, False, cfg))
     process_side = multiprocessing.Process(target=train, args=(spec_name, True, cfg))
