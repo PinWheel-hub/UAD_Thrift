@@ -1,11 +1,12 @@
 import torch
 import torch.nn as nn
-from torchvision.models import resnet18, resnet50, wide_resnet50_2
+from torchvision.models import resnet18, resnet50, wide_resnet50_2, resnet101
 
 models = {
     "resnet18": resnet18,
     "resnet50": resnet50,
-    "wide_resnet50_2": wide_resnet50_2
+    "wide_resnet50_2": wide_resnet50_2,
+    "resnet101": resnet101
 }
 
 class ResNet_PaDiM(nn.Module):
