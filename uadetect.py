@@ -93,7 +93,7 @@ def uadetect_func(part, spec_name, part_location, ww, hh):
 
 def load_func(spec_name):
     global model, if_side
-    state = torch.load('xuadetect/models/{}.pth'.format(spec_name if not if_side else f'{spec_name}_side'))
+    state = torch.load('xuadetect/models/{}.pth'.format(spec_name if not if_side else f'{spec_name}_side'), map_location=patchcore_cfg.device[0 if not if_side else 1])
     model.load(state["stats"], spec_name)
 
 def del_func():
